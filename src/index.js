@@ -33,6 +33,13 @@ import {
 } from './bible-scheduler.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
+import {
+  addGanadiAffection,
+  buildGanadiAffectionBar,
+  ganadiAffectionMax,
+  getGanadiAffection,
+  getGanadiAffectionTier
+} from './ganadi-affection.js';
 import { generateGanadiReply, shouldRespondToGanadi } from './ganadi-chat.js';
 import { startHealthServer } from './health-server.js';
 import {
@@ -167,6 +174,15 @@ async function replyAsGanadi(message) {
       parse: [],
       repliedUser: false
     }
+  });
+
+  await addGanadiAffection(
+    message.guildId,
+    message.author.id,
+    config.ganadiAffectionPerReply,
+    buildLevelProfile(message.author, message.member)
+  ).catch((error) => {
+    console.error(`가나디 호감도 저장 실패 (${message.guildId}/${message.author.id}): ${error.message}`);
   });
 
   return true;
@@ -2036,6 +2052,57 @@ async function handleBibleMessage(interaction) {
   await interaction.editReply('지원하지 않는 성경 말씀 명령입니다.');
 }
 
+function getNextGanadiAffectionGoal(score) {
+  return [60, 75, 90, 105, ganadiAffectionMax].find((goal) => score < goal) || null;
+}
+
+function buildGanadiAffectionEmbed(targetUser, affection) {
+  const tier = getGanadiAffectionTier(affection.score);
+  const nextGoal = getNextGanadiAffectionGoal(affection.score);
+  const displayName = targetUser.globalName || targetUser.username;
+  const progressText = nextGoal
+    ? `다음 관계까지 **${nextGoal - affection.score}** 남았어!`
+    : '가나디와 **최고 호감도**를 달성했어!';
+
+  return new EmbedBuilder()
+    .setColor(tier.color)
+    .setTitle(`💗 ${displayName} × 가나디 호감도`)
+    .setThumbnail(targetUser.displayAvatarURL({ extension: 'png', size: 256 }))
+    .setDescription([
+      `## ${tier.emoji} ${tier.name}`,
+      `${buildGanadiAffectionBar(affection.score)}  **${affection.score} / ${ganadiAffectionMax}**`,
+      progressText
+    ].join('\n'))
+    .addFields({
+      name: '가나디와 나눈 대화',
+      value: `총 **${affection.interactions.toLocaleString('ko-KR')}회**`,
+      inline: true
+    })
+    .setFooter({ text: '호감도는 50에서 시작하며 가나디가 답할 때마다 올라가듀!' })
+    .setTimestamp();
+}
+
+async function handleGanadiCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand !== '호감도') {
+    await interaction.editReply('지원하지 않는 가나디 명령입니다.');
+    return;
+  }
+
+  const targetUser = interaction.options.getUser('유저') || interaction.user;
+  const affection = await getGanadiAffection(interaction.guildId, targetUser.id);
+  await interaction.editReply({
+    embeds: [buildGanadiAffectionEmbed(targetUser, affection)],
+    allowedMentions: { parse: [] }
+  });
+}
+
 function serializeInvite(invite) {
   return {
     code: invite.code,
@@ -2303,6 +2370,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.bibleMessage) {
       await handleBibleMessage(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.ganadi) {
+      await handleGanadiCommand(interaction);
       return;
     }
 

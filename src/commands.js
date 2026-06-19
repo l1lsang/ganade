@@ -17,6 +17,7 @@ export const commandNames = {
   anonymousMessage: '익명',
   selfIntroduction: '자기소개',
   bibleMessage: '성경말씀',
+  ganadi: '가나디',
   level: '레벨',
   levelRanking: '랭킹',
   clean: '청소',
@@ -318,6 +319,20 @@ export function buildCommands() {
         subcommand
           .setName('상태')
           .setDescription('현재 안부 채널과 한국 시간 예약을 확인합니다.')
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.ganadi)
+      .setDescription('가나디와의 관계를 확인합니다.')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('호감도')
+          .setDescription('나 또는 다른 멤버와 가나디의 호감도를 확인합니다.')
+          .addUserOption((option) =>
+            option
+              .setName('유저')
+              .setDescription('호감도를 확인할 멤버, 비워두면 본인')
+              .setRequired(false)
+          )
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)
