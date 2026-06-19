@@ -49,7 +49,13 @@ import {
 assertRequiredConfig();
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildInvites,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 startHealthServer(client);
@@ -313,7 +319,8 @@ function formatConfiguredSettings(guildSettings) {
     `인증 역할: ${verifiedRoleId ? `<@&${verifiedRoleId}>` : `"${config.verifiedRoleName}" 자동 생성/사용`}`,
     `관리자 역할: ${adminRoleId ? `<@&${adminRoleId}>` : '설정 안 됨'}`,
     `로그 채널: ${logChannelId ? `<#${logChannelId}>` : '설정 안 됨'}`,
-    `MBTI 채널: ${guildSettings.mbtiChannelId ? `<#${guildSettings.mbtiChannelId}>` : '설정 안 됨'}`
+    `MBTI 채널: ${guildSettings.mbtiChannelId ? `<#${guildSettings.mbtiChannelId}>` : '설정 안 됨'}`,
+    `익명채팅 채널: ${guildSettings.anonymousChannelId ? `<#${guildSettings.anonymousChannelId}>` : '설정 안 됨'}`
   ].join('\n');
 }
 
@@ -1226,6 +1233,143 @@ async function handleWarning(interaction) {
   await interaction.reply({ content: '지원하지 않는 경고 명령입니다.', ephemeral: true });
 }
 
+async function assertAnonymousCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return false;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+  if (!hasPermission) {
+    await interaction.reply({ content: '익명채팅방 설정은 서버 관리 권한이 필요합니다.', ephemeral: true });
+    return false;
+  }
+
+  return true;
+}
+
+function assertAnonymousChannelPermissions(channel) {
+  const permissions = channel.permissionsFor(channel.guild.members.me);
+  const requiredPermissions = [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.ManageMessages,
+    PermissionsBitField.Flags.AttachFiles,
+    PermissionsBitField.Flags.EmbedLinks
+  ];
+  const missingPermissions = requiredPermissions.filter((permission) => !permissions?.has(permission));
+
+  if (missingPermissions.length > 0) {
+    throw new Error(`봇이 ${channel} 채널에서 메시지 보기, 메시지 보내기, 메시지 관리, 파일 첨부, 링크 임베드 권한을 모두 가져야 합니다.`);
+  }
+}
+
+function truncateAnonymousText(value, maxLength = 3900) {
+  const text = String(value || '').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 20)}\n...내용이 길어 잘렸습니다.`;
+}
+
+function buildAnonymousRelayPayload(message) {
+  const content = truncateAnonymousText(message.content);
+  const stickerNames = [...message.stickers.values()].map((sticker) => sticker.name);
+  const descriptionParts = [];
+
+  if (content) {
+    descriptionParts.push(content);
+  }
+
+  if (stickerNames.length > 0) {
+    descriptionParts.push(`스티커: ${stickerNames.join(', ')}`);
+  }
+
+  if (descriptionParts.length === 0 && message.attachments.size > 0) {
+    descriptionParts.push('첨부파일을 보냈습니다.');
+  }
+
+  const embed = new EmbedBuilder()
+    .setAuthor({ name: '익명' })
+    .setDescription(descriptionParts.join('\n\n') || '빈 메시지')
+    .setColor(0x2b2d31)
+    .setFooter({ text: '익명채팅' })
+    .setTimestamp();
+  const files = [...message.attachments.values()].slice(0, 10).map((attachment) => ({
+    attachment: attachment.url,
+    name: attachment.name || 'attachment'
+  }));
+
+  return {
+    embeds: [embed],
+    files,
+    allowedMentions: { parse: [], users: [], roles: [] }
+  };
+}
+
+async function relayAnonymousMessage(message) {
+  if (!message.guild || message.author.bot || message.system) return;
+
+  const guildSettings = await getGuildSettings(message.guild.id);
+  if (!guildSettings.anonymousChannelId || message.channelId !== guildSettings.anonymousChannelId) return;
+
+  const permissions = message.channel.permissionsFor(message.guild.members.me);
+  if (
+    !permissions?.has(PermissionsBitField.Flags.ViewChannel) ||
+    !permissions.has(PermissionsBitField.Flags.SendMessages) ||
+    !permissions.has(PermissionsBitField.Flags.ManageMessages)
+  ) {
+    console.warn(`익명채팅 처리 권한 부족 (${message.guild.id}/${message.channelId})`);
+    return;
+  }
+
+  let relayMessage = null;
+
+  try {
+    relayMessage = await message.channel.send(buildAnonymousRelayPayload(message));
+    await message.delete();
+  } catch (error) {
+    if (relayMessage?.deletable) {
+      await relayMessage.delete().catch(() => null);
+    }
+
+    console.error(`익명채팅 메시지 처리 실패 (${message.guild.id}/${message.channelId}/${message.id}): ${error.message}`);
+  }
+}
+
+async function handleAnonymousCommand(interaction) {
+  if (!(await assertAnonymousCommand(interaction))) return;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === '설정') {
+    const channel = interaction.options.getChannel('채널', true);
+    if (channel.type !== ChannelType.GuildText) {
+      throw new Error('익명채팅방은 텍스트 채널만 설정할 수 있습니다.');
+    }
+
+    assertAnonymousChannelPermissions(channel);
+
+    await updateGuildSettings(interaction.guildId, { anonymousChannelId: channel.id });
+    await interaction.editReply(`${channel} 채널을 익명채팅방으로 설정했습니다. 이제 이 채널의 일반 메시지는 익명으로 다시 전송됩니다.`);
+    return;
+  }
+
+  if (subcommand === '해제') {
+    await updateGuildSettings(interaction.guildId, { anonymousChannelId: null });
+    await interaction.editReply('익명채팅방 설정을 해제했습니다.');
+    return;
+  }
+
+  if (subcommand === '상태') {
+    const guildSettings = await getGuildSettings(interaction.guildId);
+    await interaction.editReply(`현재 익명채팅방: ${guildSettings.anonymousChannelId ? `<#${guildSettings.anonymousChannelId}>` : '설정 안 됨'}`);
+    return;
+  }
+
+  await interaction.editReply('지원하지 않는 익명채팅 명령입니다.');
+}
+
 async function handlePing(interaction) {
   await interaction.reply({
     content: `퐁! Discord 연결 정상입니다. 업타임 ${Math.round(process.uptime())}초`,
@@ -1457,6 +1601,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.anonymous) {
+      await handleAnonymousCommand(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.ping) {
       await handlePing(interaction);
       return;
@@ -1475,6 +1624,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.isRepliable()) {
       await interaction.reply({ content: `오류: ${message}`, ephemeral: true }).catch(() => null);
     }
+  }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  try {
+    await relayAnonymousMessage(message);
+  } catch (error) {
+    console.error(`익명채팅 이벤트 처리 실패: ${error.message}`);
   }
 });
 

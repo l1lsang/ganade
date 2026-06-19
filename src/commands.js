@@ -13,6 +13,7 @@ export const commandNames = {
   addEmoji: '이모지추가',
   attendance: '출석체크',
   warning: '경고',
+  anonymous: '익명채팅',
   ping: '핑'
 };
 
@@ -220,6 +221,32 @@ export function buildCommands() {
               .setMinValue(1)
               .setMaxValue(100)
           )
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.anonymous)
+      .setDescription('익명채팅방을 설정하거나 해제합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('설정')
+          .setDescription('일반 메시지를 익명 메시지로 바꿔 보낼 채널을 지정합니다.')
+          .addChannelOption((option) =>
+            option
+              .setName('채널')
+              .setDescription('익명채팅방으로 사용할 텍스트 채널')
+              .setRequired(true)
+              .addChannelTypes(ChannelType.GuildText)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('해제')
+          .setDescription('익명채팅방 설정을 해제합니다.')
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('상태')
+          .setDescription('현재 익명채팅방 설정을 확인합니다.')
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ping)
