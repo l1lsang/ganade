@@ -775,6 +775,50 @@ async function handleCustomReligionModal(interaction) {
   await interaction.editReply(formatReligionRoleReply(result));
 }
 
+function isUnknownInteractionError(error) {
+  return error?.code === 10062 || error?.rawError?.code === 10062 || /Unknown interaction/i.test(error?.message || '');
+}
+
+async function deferInteractionSafely(interaction) {
+  if (interaction.deferred || interaction.replied) return true;
+
+  try {
+    await interaction.deferReply({ ephemeral: true });
+    return true;
+  } catch (error) {
+    if (!isUnknownInteractionError(error)) {
+      throw error;
+    }
+
+    console.warn('상호작용 응답 토큰이 만료되어 Discord 응답 대신 채널 fallback을 사용합니다.');
+    return false;
+  }
+}
+
+async function sendInteractionResult(interaction, content, acknowledged) {
+  if (acknowledged || interaction.deferred || interaction.replied) {
+    try {
+      await interaction.editReply(content);
+      return;
+    } catch (error) {
+      if (!isUnknownInteractionError(error)) {
+        throw error;
+      }
+
+      console.warn('상호작용 결과 응답 토큰이 만료되어 채널 fallback을 사용합니다.');
+    }
+  }
+
+  if (interaction.channel?.isTextBased()) {
+    await interaction.channel.send({
+      content,
+      allowedMentions: { users: [], roles: [] }
+    }).catch((error) => {
+      console.error(`상호작용 fallback 메시지 전송 실패: ${error.message}`);
+    });
+  }
+}
+
 async function handleUpdate(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
@@ -787,7 +831,7 @@ async function handleUpdate(interaction) {
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  const acknowledged = await deferInteractionSafely(interaction);
 
   const scope = interaction.options.getString('범위') || 'guild';
   const result = await syncAllCommands({
@@ -796,7 +840,7 @@ async function handleUpdate(interaction) {
   });
 
   const target = result.scope === 'global' ? '전역' : '현재 서버';
-  await interaction.editReply(`${target} 명령어 ${result.count}개를 동기화했습니다.`);
+  await sendInteractionResult(interaction, `${target} 명령어 ${result.count}개를 동기화했습니다.`, acknowledged);
 }
 
 async function getPanelTargetChannel(interaction) {
@@ -1719,6 +1763,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!interaction.isChatInputCommand()) return;
 
+    if (interaction.commandName === commandNames.update) {
+      await handleUpdate(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.verify) {
       await handleVerify(interaction);
       return;
@@ -1789,9 +1838,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (interaction.commandName === commandNames.update) {
-      await handleUpdate(interaction);
-    }
   } catch (error) {
     const interactionName = interaction.commandName || interaction.customId || interaction.type;
     console.error(`상호작용 처리 실패 (${interactionName}): ${error.message}`);
