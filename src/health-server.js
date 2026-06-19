@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { ChannelType, PermissionsBitField } from 'discord.js';
 import { config } from './config.js';
+import { getLevelRanking, getLevelRules, getLevelSummary } from './level-system.js';
 import { getGuildSettings, updateGuildSettings } from './settings.js';
 
 function readEnabled() {
@@ -191,6 +192,43 @@ async function handleGuildDetailApi(client, guildId, response) {
   });
 }
 
+function serializeLevelRankingEntry(guild, entry) {
+  const member = guild.members.cache.get(entry.userId);
+  const user = member?.user || guild.client.users.cache.get(entry.userId);
+
+  return {
+    ...entry,
+    username: user?.username || entry.username || '알 수 없는 유저',
+    displayName: member?.displayName || entry.displayName || user?.globalName || user?.username || '알 수 없는 유저',
+    avatarUrl: user?.displayAvatarURL({ extension: 'png', size: 128 }) || entry.avatarUrl || null
+  };
+}
+
+async function handleLevelRankingsApi(client, guildId, response, url) {
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) {
+    sendJson(response, 404, { ok: false, error: 'guild_not_found' });
+    return;
+  }
+
+  const type = url.searchParams.get('type') || 'overall';
+  const rawLimit = Number(url.searchParams.get('limit') || 50);
+  const limit = Number.isFinite(rawLimit) ? Math.max(10, Math.min(100, Math.floor(rawLimit))) : 50;
+  const [ranking, summary] = await Promise.all([
+    getLevelRanking(guildId, type, limit),
+    getLevelSummary(guildId)
+  ]);
+
+  sendJson(response, 200, {
+    ok: true,
+    guild: serializeGuild(guild),
+    type,
+    ranking: ranking.map((entry) => serializeLevelRankingEntry(guild, entry)),
+    summary,
+    rules: getLevelRules()
+  });
+}
+
 async function handleWelcomeSaveApi(client, guildId, request, response) {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) {
@@ -259,6 +297,12 @@ async function handleApiRequest(client, request, response, url) {
     return;
   }
 
+  const rankingMatch = url.pathname.match(/^\/api\/guilds\/(\d+)\/rankings$/);
+  if (request.method === 'GET' && rankingMatch) {
+    await handleLevelRankingsApi(client, rankingMatch[1], response, url);
+    return;
+  }
+
   const welcomeMatch = url.pathname.match(/^\/api\/guilds\/(\d+)\/welcome$/);
   if (request.method === 'POST' && welcomeMatch) {
     await handleWelcomeSaveApi(client, welcomeMatch[1], request, response);
@@ -274,7 +318,7 @@ async function handleApiRequest(client, request, response, url) {
   sendJson(response, 404, { ok: false, error: 'not_found' });
 }
 
-function buildAdminHtml() {
+export function buildAdminHtml() {
   return `<!doctype html>
 <html lang="ko">
 <head>
@@ -425,18 +469,88 @@ function buildAdminHtml() {
       background: #e5e7eb;
     }
     .preview-title { font-weight: 800; }
+    .ranking-panel { margin-top: 16px; }
+    .ranking-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .ranking-head button { flex: 0 0 auto; }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+    .summary-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #f8fafc;
+    }
+    .summary-card span {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .summary-card strong { font-size: 20px; }
+    .ranking-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 4px 0 14px;
+    }
+    .ranking-tab { background: #e5e7eb; color: var(--text); }
+    .ranking-tab:hover { background: #d1d5db; }
+    .ranking-tab.active { background: var(--accent); color: #fff; }
+    .table-wrap { overflow-x: auto; }
+    .ranking-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 680px;
+    }
+    .ranking-table th,
+    .ranking-table td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }
+    .ranking-table th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .ranking-table tbody tr:hover { background: #f8fafc; }
+    .rank-number { width: 72px; font-weight: 800; }
+    .rank-member { display: flex; align-items: center; gap: 10px; min-width: 200px; }
+    .rank-member img {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background: #e5e7eb;
+    }
+    .rank-member strong,
+    .rank-member small { display: block; }
+    .rank-member small { margin-top: 2px; color: var(--muted); }
+    .empty-ranking { padding: 28px !important; text-align: center !important; color: var(--muted); }
     .hidden { display: none; }
     @media (max-width: 840px) {
       main { width: min(100% - 20px, 640px); padding-top: 20px; }
       .grid { grid-template-columns: 1fr; }
       .split { grid-template-columns: 1fr; }
+      .summary-grid { grid-template-columns: 1fr 1fr; }
+      .ranking-head { align-items: stretch; flex-direction: column; }
     }
   </style>
 </head>
 <body>
   <main>
     <h1>봇 웹 설정</h1>
-    <p>서버를 고른 뒤 입장/퇴장 로그를 설정하세요. 외부 이모지는 Discord 형식 <code>&lt;:name:id&gt;</code> 또는 <code>&lt;a:name:id&gt;</code>를 그대로 넣으면 됩니다.</p>
+    <p>서버를 고른 뒤 입장/퇴장 로그를 설정하고, 채팅·음성방 활동 레벨과 랭킹을 확인하세요.</p>
 
     <section class="grid">
       <aside class="panel">
@@ -529,10 +643,49 @@ function buildAdminHtml() {
         <div id="rightStatus" class="status"></div>
       </section>
     </section>
+
+    <section id="rankingPanel" class="panel ranking-panel hidden">
+      <div class="ranking-head">
+        <div>
+          <h2>활동 레벨 랭킹</h2>
+          <p id="rankingDescription">서버를 선택하면 실시간 활동 랭킹을 불러옵니다.</p>
+        </div>
+        <button id="refreshRanking" class="secondary" type="button">랭킹 새로고침</button>
+      </div>
+
+      <div class="summary-grid">
+        <div class="summary-card"><span>참여 멤버</span><strong id="summaryUsers">0명</strong></div>
+        <div class="summary-card"><span>누적 채팅</span><strong id="summaryCharacters">0자</strong></div>
+        <div class="summary-card"><span>채팅 메시지</span><strong id="summaryMessages">0개</strong></div>
+        <div class="summary-card"><span>누적 음성방</span><strong id="summaryVoice">0분</strong></div>
+      </div>
+
+      <div class="ranking-tabs" role="tablist" aria-label="랭킹 종류">
+        <button class="ranking-tab active" type="button" data-ranking-type="overall">종합 랭킹</button>
+        <button class="ranking-tab" type="button" data-ranking-type="chat">채팅 랭킹</button>
+        <button class="ranking-tab" type="button" data-ranking-type="voice">음성방 랭킹</button>
+      </div>
+
+      <div class="table-wrap">
+        <table class="ranking-table">
+          <thead>
+            <tr>
+              <th>순위</th>
+              <th>멤버</th>
+              <th>레벨</th>
+              <th id="rankingScoreHeading">종합 XP</th>
+              <th id="rankingDetailHeading">활동 상세</th>
+            </tr>
+          </thead>
+          <tbody id="rankingBody"></tbody>
+        </table>
+      </div>
+      <div id="rankingStatus" class="status"></div>
+    </section>
   </main>
 
   <script>
-    const state = { guilds: [], guild: null, channels: [] };
+    const state = { guilds: [], guild: null, channels: [], rankingType: 'overall', rankingRequestId: 0 };
     const els = {
       token: document.getElementById('token'),
       saveToken: document.getElementById('saveToken'),
@@ -569,7 +722,19 @@ function buildAdminHtml() {
       previewGuild: document.getElementById('previewGuild'),
       previewMessage: document.getElementById('previewMessage'),
       welcomePreviewButton: document.getElementById('welcomePreviewButton'),
-      leavePreviewButton: document.getElementById('leavePreviewButton')
+      leavePreviewButton: document.getElementById('leavePreviewButton'),
+      rankingPanel: document.getElementById('rankingPanel'),
+      rankingDescription: document.getElementById('rankingDescription'),
+      refreshRanking: document.getElementById('refreshRanking'),
+      summaryUsers: document.getElementById('summaryUsers'),
+      summaryCharacters: document.getElementById('summaryCharacters'),
+      summaryMessages: document.getElementById('summaryMessages'),
+      summaryVoice: document.getElementById('summaryVoice'),
+      rankingScoreHeading: document.getElementById('rankingScoreHeading'),
+      rankingDetailHeading: document.getElementById('rankingDetailHeading'),
+      rankingBody: document.getElementById('rankingBody'),
+      rankingStatus: document.getElementById('rankingStatus'),
+      rankingTabs: [...document.querySelectorAll('[data-ranking-type]')]
     };
 
     els.token.value = localStorage.getItem('webAdminToken') || '';
@@ -686,6 +851,118 @@ function buildAdminHtml() {
       els.previewMessage.textContent = message || '메시지가 비어 있습니다.';
     }
 
+    function formatNumber(value) {
+      return Math.floor(Number(value) || 0).toLocaleString('ko-KR');
+    }
+
+    function formatDuration(totalSeconds) {
+      const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const parts = [];
+      if (days > 0) parts.push(days + '일');
+      if (hours > 0) parts.push(hours + '시간');
+      if (minutes > 0 || parts.length === 0) parts.push(minutes + '분');
+      return parts.join(' ');
+    }
+
+    function getRankingLabels(type) {
+      if (type === 'chat') return { score: '채팅 글자수', description: '공백을 제외한 누적 채팅 글자수 순위입니다.' };
+      if (type === 'voice') return { score: '누적 체류 시간', description: 'Discord AFK 채널을 제외한 음성방 누적 체류 시간 순위입니다.' };
+      return { score: '종합 XP', description: '채팅 글자수와 음성방 체류 XP를 합산한 종합 순위입니다.' };
+    }
+
+    function buildRankingMemberCell(entry) {
+      const wrapper = document.createElement('div');
+      const image = document.createElement('img');
+      const text = document.createElement('div');
+      const name = document.createElement('strong');
+      const username = document.createElement('small');
+
+      wrapper.className = 'rank-member';
+      image.alt = '';
+      image.src = entry.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png';
+      name.textContent = entry.displayName;
+      username.textContent = '@' + entry.username;
+      text.append(name, username);
+      wrapper.append(image, text);
+      return wrapper;
+    }
+
+    function renderRanking(data) {
+      const type = data.type;
+      const labels = getRankingLabels(type);
+      state.rankingType = type;
+      els.rankingDescription.textContent = state.guild.name + ' · ' + labels.description;
+      els.rankingScoreHeading.textContent = labels.score;
+      els.rankingDetailHeading.textContent = type === 'overall' ? '채팅 / 음성방' : '활동 상세';
+      els.summaryUsers.textContent = formatNumber(data.summary.totalUsers) + '명';
+      els.summaryCharacters.textContent = formatNumber(data.summary.totalChatCharacters) + '자';
+      els.summaryMessages.textContent = formatNumber(data.summary.totalChatMessages) + '개';
+      els.summaryVoice.textContent = formatDuration(data.summary.totalVoiceSeconds);
+
+      els.rankingTabs.forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.rankingType === type);
+      });
+
+      els.rankingBody.innerHTML = '';
+      if (data.ranking.length === 0) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 5;
+        cell.className = 'empty-ranking';
+        cell.textContent = '아직 이 랭킹에 표시할 활동 기록이 없습니다.';
+        row.appendChild(cell);
+        els.rankingBody.appendChild(row);
+      }
+
+      data.ranking.forEach((entry) => {
+        const row = document.createElement('tr');
+        const rankCell = document.createElement('td');
+        const memberCell = document.createElement('td');
+        const levelCell = document.createElement('td');
+        const scoreCell = document.createElement('td');
+        const detailCell = document.createElement('td');
+        const medals = ['🥇', '🥈', '🥉'];
+
+        rankCell.className = 'rank-number';
+        rankCell.textContent = medals[entry.rank - 1] || entry.rank + '위';
+        memberCell.appendChild(buildRankingMemberCell(entry));
+        levelCell.textContent = 'Lv.' + entry.level;
+
+        if (type === 'chat') {
+          scoreCell.textContent = formatNumber(entry.chatCharacters) + '자';
+          detailCell.textContent = formatNumber(entry.chatMessages) + '개 메시지 · ' + formatNumber(entry.chatXp) + ' XP';
+        } else if (type === 'voice') {
+          scoreCell.textContent = formatDuration(entry.voiceSeconds);
+          detailCell.textContent = formatNumber(entry.voiceXp) + ' XP';
+        } else {
+          scoreCell.textContent = formatNumber(entry.totalXp) + ' XP';
+          detailCell.textContent = formatNumber(entry.chatCharacters) + '자 · ' + formatDuration(entry.voiceSeconds);
+        }
+
+        row.append(rankCell, memberCell, levelCell, scoreCell, detailCell);
+        els.rankingBody.appendChild(row);
+      });
+
+      const rules = data.rules;
+      setStatus(
+        els.rankingStatus,
+        '채팅 1자당 ' + rules.chatXpPerCharacter + ' XP · 음성 1분당 ' + rules.voiceXpPerMinute + ' XP · 최대 50명 표시',
+        'ok'
+      );
+    }
+
+    async function loadRanking(type = state.rankingType) {
+      if (!state.guild) return;
+      const requestId = ++state.rankingRequestId;
+      setStatus(els.rankingStatus, '랭킹을 불러오는 중...');
+      const data = await api('/api/guilds/' + state.guild.id + '/rankings?type=' + encodeURIComponent(type) + '&limit=50');
+      if (requestId !== state.rankingRequestId) return;
+      renderRanking(data);
+    }
+
     async function loadGuilds() {
       setStatus(els.leftStatus, '서버를 불러오는 중...');
       const data = await api('/api/guilds');
@@ -719,6 +996,8 @@ function buildAdminHtml() {
       });
       renderPreview('welcome');
       renderGuilds();
+      els.rankingPanel.classList.remove('hidden');
+      await loadRanking(state.rankingType);
       setStatus(els.rightStatus, '설정을 불러왔습니다.', 'ok');
     }
 
@@ -729,6 +1008,16 @@ function buildAdminHtml() {
 
     els.loadGuilds.addEventListener('click', () => {
       loadGuilds().catch((error) => setStatus(els.leftStatus, error.message, 'error'));
+    });
+
+    els.refreshRanking.addEventListener('click', () => {
+      loadRanking().catch((error) => setStatus(els.rankingStatus, error.message, 'error'));
+    });
+
+    els.rankingTabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        loadRanking(tab.dataset.rankingType).catch((error) => setStatus(els.rankingStatus, error.message, 'error'));
+      });
     });
 
     els.welcomeForm.addEventListener('submit', (event) => {

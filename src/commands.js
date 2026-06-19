@@ -15,6 +15,8 @@ export const commandNames = {
   warning: '경고',
   anonymous: '익명채팅',
   anonymousMessage: '익명',
+  level: '레벨',
+  levelRanking: '랭킹',
   clean: '청소',
   ping: '핑'
 };
@@ -277,6 +279,29 @@ export function buildCommands() {
           .setName('첨부파일')
           .setDescription('익명 메시지에 함께 보낼 파일')
           .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.level)
+      .setDescription('나 또는 다른 유저의 채팅·음성 활동 레벨을 확인합니다.')
+      .addUserOption((option) =>
+        option
+          .setName('유저')
+          .setDescription('레벨을 확인할 유저, 비워두면 본인')
+          .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.levelRanking)
+      .setDescription('종합·채팅·음성 활동 랭킹을 확인합니다.')
+      .addStringOption((option) =>
+        option
+          .setName('종류')
+          .setDescription('확인할 랭킹 종류')
+          .setRequired(false)
+          .addChoices(
+            { name: '종합 랭킹', value: 'overall' },
+            { name: '채팅 랭킹', value: 'chat' },
+            { name: '음성방 랭킹', value: 'voice' }
+          )
       ),
     new SlashCommandBuilder()
       .setName(commandNames.clean)

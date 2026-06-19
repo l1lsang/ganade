@@ -51,7 +51,10 @@ export const config = {
   maxImageBytes: Math.round(readNumber(process.env.MAX_IMAGE_MB, 8) * 1024 * 1024),
   autoRegisterUpdateCommand: readBoolean(process.env.AUTO_REGISTER_UPDATE_COMMAND, true),
   logChannelId: process.env.LOG_CHANNEL_ID || null,
-  webAdminToken: process.env.WEB_ADMIN_TOKEN || null
+  webAdminToken: process.env.WEB_ADMIN_TOKEN || null,
+  levelChatXpPerCharacter: Math.max(1, Math.floor(readNumber(process.env.LEVEL_CHAT_XP_PER_CHARACTER, 1))),
+  levelVoiceXpPerMinute: Math.max(1, Math.floor(readNumber(process.env.LEVEL_VOICE_XP_PER_MINUTE, 10))),
+  levelXpStep: Math.max(1, Math.floor(readNumber(process.env.LEVEL_XP_STEP, 250)))
 };
 
 export function assertRequiredConfig({ forSyncOnly = false } = {}) {

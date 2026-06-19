@@ -29,6 +29,15 @@ import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
 import { startHealthServer } from './health-server.js';
 import {
+  checkpointVoiceSessions,
+  endVoiceSession,
+  getLevelRanking,
+  getUserLevelRank,
+  getUserLevelStats,
+  recordChatActivity,
+  startVoiceSession
+} from './level-system.js';
+import {
   assertCanManageRoles,
   assertRoleAssignable,
   getMbtiAxis,
@@ -58,7 +67,10 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildInvites
+    GatewayIntentBits.GuildInvites,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -72,7 +84,8 @@ const customIds = {
   religionCustomButton: 'religion:custom',
   religionCustomModal: 'religion:custom:modal',
   religionCustomInput: 'religion_name',
-  mbtiPrefix: 'mbti:'
+  mbtiPrefix: 'mbti:',
+  levelRankingPrefix: 'level-ranking:'
 };
 
 const inviteCache = new Map();
@@ -336,6 +349,33 @@ function formatDiscordTimestamp(dateOrTimestamp, style = 'F') {
 
 function getMemberDisplayName(member) {
   return member.displayName || member.user.globalName || member.user.username;
+}
+
+function buildLevelProfile(user, member = null) {
+  return {
+    username: user.username,
+    displayName: member?.displayName || user.globalName || user.username,
+    avatarUrl: user.displayAvatarURL({ extension: 'png', size: 128 })
+  };
+}
+
+function isEligibleVoiceState(voiceState) {
+  return Boolean(
+    voiceState.channelId &&
+    voiceState.channelId !== voiceState.guild.afkChannelId &&
+    voiceState.member &&
+    !voiceState.member.user.bot
+  );
+}
+
+function startTrackedVoiceState(voiceState, now = Date.now()) {
+  if (!isEligibleVoiceState(voiceState)) return false;
+  return startVoiceSession(
+    voiceState.guild.id,
+    voiceState.id,
+    buildLevelProfile(voiceState.member.user, voiceState.member),
+    now
+  );
 }
 
 function getInviterTokens(inviterInfo) {
@@ -1104,6 +1144,158 @@ async function handleAttendance(interaction) {
   await handleAttendanceCheck(interaction);
 }
 
+const levelRankingTypes = {
+  overall: { label: '종합', color: 0x5865f2 },
+  chat: { label: '채팅', color: 0x57f287 },
+  voice: { label: '음성방', color: 0xeb459e }
+};
+
+function formatLevelNumber(value) {
+  return Math.floor(Number(value) || 0).toLocaleString('ko-KR');
+}
+
+function formatVoiceDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const parts = [];
+
+  if (days > 0) parts.push(`${days}일`);
+  if (hours > 0) parts.push(`${hours}시간`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}분`);
+  return parts.join(' ');
+}
+
+function buildProgressBar(percent) {
+  const filled = Math.max(0, Math.min(10, Math.round(percent / 10)));
+  return `${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)}`;
+}
+
+function buildLevelEmbed(targetUser, stats, rank) {
+  return new EmbedBuilder()
+    .setTitle(`${targetUser.globalName || targetUser.username}님의 활동 레벨`)
+    .setThumbnail(targetUser.displayAvatarURL({ extension: 'png', size: 256 }))
+    .setColor(0x5865f2)
+    .setDescription([
+      `## LEVEL ${stats.level}`,
+      `${buildProgressBar(stats.progressPercent)} ${stats.progressPercent}%`,
+      `${formatLevelNumber(stats.progressXp)} / ${formatLevelNumber(stats.requiredXp)} XP · 종합 ${rank ? `#${rank}` : '순위 없음'}`
+    ].join('\n'))
+    .addFields(
+      {
+        name: '종합 XP',
+        value: `${formatLevelNumber(stats.totalXp)} XP`,
+        inline: true
+      },
+      {
+        name: '채팅 활동',
+        value: `${formatLevelNumber(stats.chatCharacters)}자\n${formatLevelNumber(stats.chatMessages)}개 메시지`,
+        inline: true
+      },
+      {
+        name: '음성방 활동',
+        value: `${formatVoiceDuration(stats.voiceSeconds)}\n${formatLevelNumber(stats.voiceXp)} XP`,
+        inline: true
+      }
+    )
+    .setFooter({ text: '채팅 글자수와 음성방 체류 시간을 함께 반영합니다.' })
+    .setTimestamp();
+}
+
+function buildLevelRankingComponents(activeType) {
+  return [
+    new ActionRowBuilder().addComponents(
+      ...Object.entries(levelRankingTypes).map(([type, values]) =>
+        new ButtonBuilder()
+          .setCustomId(`${customIds.levelRankingPrefix}${type}`)
+          .setLabel(`${values.label} 랭킹`)
+          .setStyle(type === activeType ? ButtonStyle.Primary : ButtonStyle.Secondary)
+      )
+    )
+  ];
+}
+
+function formatLevelRankingLine(entry, type) {
+  const medal = ['🥇', '🥈', '🥉'][entry.rank - 1] || `**${entry.rank}위**`;
+
+  if (type === 'chat') {
+    return `${medal} <@${entry.userId}> · **${formatLevelNumber(entry.chatCharacters)}자** (${formatLevelNumber(entry.chatMessages)}개) · Lv.${entry.level}`;
+  }
+
+  if (type === 'voice') {
+    return `${medal} <@${entry.userId}> · **${formatVoiceDuration(entry.voiceSeconds)}** · ${formatLevelNumber(entry.voiceXp)} XP`;
+  }
+
+  return `${medal} <@${entry.userId}> · **Lv.${entry.level}** · ${formatLevelNumber(entry.totalXp)} XP`;
+}
+
+function buildLevelRankingEmbed(ranking, type) {
+  const values = levelRankingTypes[type];
+  const description = ranking.length > 0
+    ? ranking.map((entry) => formatLevelRankingLine(entry, type)).join('\n')
+    : `아직 ${values.label} 활동 기록이 없습니다.`;
+
+  return new EmbedBuilder()
+    .setTitle(`${values.label} 활동 랭킹`)
+    .setDescription(description)
+    .setColor(values.color)
+    .setFooter({ text: type === 'voice' ? '음성방 누적 체류 시간 기준 TOP 10' : type === 'chat' ? '공백 제외 채팅 글자수 기준 TOP 10' : '채팅 XP + 음성방 XP 기준 TOP 10' })
+    .setTimestamp();
+}
+
+async function buildLevelRankingReply(guildId, type) {
+  const ranking = await getLevelRanking(guildId, type, 10);
+  return {
+    embeds: [buildLevelRankingEmbed(ranking, type)],
+    components: buildLevelRankingComponents(type),
+    allowedMentions: { users: [], roles: [] }
+  };
+}
+
+async function handleLevel(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+  const targetUser = interaction.options.getUser('유저') || interaction.user;
+  const [stats, rank] = await Promise.all([
+    getUserLevelStats(interaction.guildId, targetUser.id),
+    getUserLevelRank(interaction.guildId, targetUser.id)
+  ]);
+
+  await interaction.editReply({
+    embeds: [buildLevelEmbed(targetUser, stats, rank)],
+    allowedMentions: { users: [], roles: [] }
+  });
+}
+
+async function handleLevelRanking(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+  const type = interaction.options.getString('종류') || 'overall';
+  await interaction.editReply(await buildLevelRankingReply(interaction.guildId, type));
+}
+
+async function handleLevelRankingButton(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const type = interaction.customId.slice(customIds.levelRankingPrefix.length);
+  if (!levelRankingTypes[type]) throw new Error('올바른 랭킹 종류가 아닙니다.');
+
+  await interaction.deferUpdate();
+  await interaction.editReply(await buildLevelRankingReply(interaction.guildId, type));
+}
+
 async function assertWarningCommand(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
@@ -1490,6 +1682,13 @@ async function handleAnonymousMessage(interaction) {
     attachmentCount: attachment ? 1 : 0
   });
 
+  await recordChatActivity(
+    interaction.guildId,
+    interaction.user.id,
+    content,
+    buildLevelProfile(interaction.user, interaction.member)
+  );
+
   await interaction.editReply('익명 메시지를 전달했습니다.');
 }
 
@@ -1729,6 +1928,12 @@ client.once(Events.ClientReady, async (readyClient) => {
 
   await Promise.all([...readyClient.guilds.cache.values()].map((guild) => refreshInviteCache(guild)));
 
+  for (const guild of readyClient.guilds.cache.values()) {
+    for (const voiceState of guild.voiceStates.cache.values()) {
+      startTrackedVoiceState(voiceState);
+    }
+  }
+
   if (!config.autoRegisterUpdateCommand) return;
 
   try {
@@ -1737,6 +1942,43 @@ client.once(Events.ClientReady, async (readyClient) => {
     console.log(`/업데이트 명령어 확인 완료 (${result.scope}, ${result.created ? 'created' : 'updated'})`);
   } catch (error) {
     console.error(`/업데이트 자동 등록 실패: ${error.message}`);
+  }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  if (!message.inGuild() || message.author.bot || message.webhookId) return;
+
+  try {
+    await recordChatActivity(
+      message.guildId,
+      message.author.id,
+      message.content,
+      buildLevelProfile(message.author, message.member)
+    );
+  } catch (error) {
+    console.error(`채팅 레벨 기록 실패 (${message.guildId}/${message.author.id}): ${error.message}`);
+  }
+});
+
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  if (newState.member?.user.bot || oldState.member?.user.bot) return;
+
+  try {
+    const wasEligible = isEligibleVoiceState(oldState);
+    const isEligible = isEligibleVoiceState(newState);
+
+    if (!wasEligible && isEligible) {
+      startTrackedVoiceState(newState);
+      return;
+    }
+
+    if (wasEligible && !isEligible) {
+      await endVoiceSession(oldState.guild.id, oldState.id);
+    }
+  } catch (error) {
+    const guildId = newState.guild?.id || oldState.guild?.id || 'unknown';
+    const userId = newState.id || oldState.id || 'unknown';
+    console.error(`음성방 레벨 기록 실패 (${guildId}/${userId}): ${error.message}`);
   }
 });
 
@@ -1765,6 +2007,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId.startsWith(customIds.mbtiPrefix)) {
         await handleMbtiButton(interaction);
+        return;
+      }
+
+      if (interaction.customId.startsWith(customIds.levelRankingPrefix)) {
+        await handleLevelRankingButton(interaction);
         return;
       }
     }
@@ -1846,6 +2093,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.level) {
+      await handleLevel(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.levelRanking) {
+      await handleLevelRanking(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.clean) {
       await handleClean(interaction);
       return;
@@ -1908,7 +2165,17 @@ client.on(Events.Warn, (warning) => {
 
 client.on(Events.ShardDisconnect, (event) => {
   console.error(`Discord gateway disconnected: ${event.code} ${event.reason || ''}`.trim());
+  checkpointVoiceSessions().catch((error) => {
+    console.error(`음성방 체크포인트 저장 실패: ${error.message}`);
+  });
 });
+
+const voiceCheckpointTimer = setInterval(() => {
+  checkpointVoiceSessions().catch((error) => {
+    console.error(`음성방 체크포인트 저장 실패: ${error.message}`);
+  });
+}, 60 * 1000);
+voiceCheckpointTimer.unref();
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
