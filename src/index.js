@@ -58,9 +58,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildInvites,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildInvites
   ]
 });
 
@@ -1289,7 +1287,6 @@ function assertAnonymousChannelPermissions(channel) {
   const requiredPermissions = [
     PermissionsBitField.Flags.ViewChannel,
     PermissionsBitField.Flags.SendMessages,
-    PermissionsBitField.Flags.ManageMessages,
     PermissionsBitField.Flags.ManageWebhooks,
     PermissionsBitField.Flags.AttachFiles,
     PermissionsBitField.Flags.EmbedLinks
@@ -1297,7 +1294,7 @@ function assertAnonymousChannelPermissions(channel) {
   const missingPermissions = requiredPermissions.filter((permission) => !permissions?.has(permission));
 
   if (missingPermissions.length > 0) {
-    throw new Error(`봇이 ${channel} 채널에서 메시지 보기, 메시지 보내기, 메시지 관리, 웹훅 관리, 파일 첨부, 링크 임베드 권한을 모두 가져야 합니다.`);
+    throw new Error(`봇이 ${channel} 채널에서 메시지 보기, 메시지 보내기, 웹훅 관리, 파일 첨부, 링크 임베드 권한을 모두 가져야 합니다.`);
   }
 }
 
@@ -1321,27 +1318,24 @@ async function getAnonymousWebhook(channel) {
   });
 }
 
-function buildAnonymousRelayPayload(message, identity) {
-  const content = truncateAnonymousText(message.content);
-  const stickerNames = [...message.stickers.values()].map((sticker) => sticker.name);
+function buildAnonymousRelayPayload(content, identity, attachment = null) {
+  const cleanContent = truncateAnonymousText(content);
   const contentParts = [];
 
-  if (content) {
-    contentParts.push(content);
+  if (cleanContent) {
+    contentParts.push(cleanContent);
   }
 
-  if (stickerNames.length > 0) {
-    contentParts.push(`스티커: ${stickerNames.join(', ')}`);
-  }
-
-  if (contentParts.length === 0 && message.attachments.size > 0) {
+  if (contentParts.length === 0 && attachment) {
     contentParts.push('첨부파일');
   }
 
-  const files = [...message.attachments.values()].slice(0, 10).map((attachment) => ({
-    attachment: attachment.url,
-    name: attachment.name || 'attachment'
-  }));
+  const files = attachment
+    ? [{
+        attachment: attachment.url,
+        name: attachment.name || 'attachment'
+      }]
+    : [];
 
   return {
     username: `ㅇㅇ(${identity.code})`,
@@ -1349,49 +1343,6 @@ function buildAnonymousRelayPayload(message, identity) {
     files,
     allowedMentions: { parse: [], users: [], roles: [] }
   };
-}
-
-async function relayAnonymousMessage(message) {
-  if (!message.guild || message.author.bot || message.webhookId || message.system) return;
-
-  const guildSettings = await getGuildSettings(message.guild.id);
-  if (!guildSettings.anonymousChannelId || message.channelId !== guildSettings.anonymousChannelId) return;
-
-  const permissions = message.channel.permissionsFor(message.guild.members.me);
-  if (
-    !permissions?.has(PermissionsBitField.Flags.ViewChannel) ||
-    !permissions.has(PermissionsBitField.Flags.SendMessages) ||
-    !permissions.has(PermissionsBitField.Flags.ManageMessages) ||
-    !permissions.has(PermissionsBitField.Flags.ManageWebhooks)
-  ) {
-    console.warn(`익명채팅 처리 권한 부족 (${message.guild.id}/${message.channelId})`);
-    return;
-  }
-
-  let relayMessage = null;
-
-  try {
-    const identity = await getOrCreateAnonymousIdentity(message.guild.id, message.author);
-    const webhook = await getAnonymousWebhook(message.channel);
-
-    relayMessage = await webhook.send(buildAnonymousRelayPayload(message, identity));
-    await recordAnonymousMessage(message.guild.id, {
-      userId: message.author.id,
-      code: identity.code,
-      channelId: message.channelId,
-      originalMessageId: message.id,
-      relayMessageId: relayMessage.id,
-      contentPreview: truncateAnonymousText(message.content, 120),
-      attachmentCount: message.attachments.size
-    });
-    await message.delete();
-  } catch (error) {
-    if (relayMessage?.deletable) {
-      await relayMessage.delete().catch(() => null);
-    }
-
-    console.error(`익명채팅 메시지 처리 실패 (${message.guild.id}/${message.channelId}/${message.id}): ${error.message}`);
-  }
 }
 
 function buildAnonymousTraceEmbed(guildId, traceResult, user) {
@@ -1447,6 +1398,44 @@ function buildAnonymousTraceEmbed(guildId, traceResult, user) {
   return embed;
 }
 
+async function handleAnonymousMessage(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const guildSettings = await getGuildSettings(interaction.guildId);
+  if (!guildSettings.anonymousChannelId) {
+    await interaction.editReply('아직 익명채팅방이 설정되지 않았습니다. 관리자에게 `/익명채팅 설정`을 요청해 주세요.');
+    return;
+  }
+
+  if (interaction.channelId !== guildSettings.anonymousChannelId) {
+    await interaction.editReply(`이 명령어는 지정된 익명채팅방 <#${guildSettings.anonymousChannelId}> 에서만 사용할 수 있습니다.`);
+    return;
+  }
+
+  const content = interaction.options.getString('전달내용', true);
+  const attachment = interaction.options.getAttachment('첨부파일');
+  const identity = await getOrCreateAnonymousIdentity(interaction.guildId, interaction.user);
+  const webhook = await getAnonymousWebhook(interaction.channel);
+  const relayMessage = await webhook.send(buildAnonymousRelayPayload(content, identity, attachment));
+
+  await recordAnonymousMessage(interaction.guildId, {
+    userId: interaction.user.id,
+    code: identity.code,
+    channelId: interaction.channelId,
+    interactionId: interaction.id,
+    relayMessageId: relayMessage.id,
+    contentPreview: truncateAnonymousText(content, 120),
+    attachmentCount: attachment ? 1 : 0
+  });
+
+  await interaction.editReply('익명 메시지를 전달했습니다.');
+}
+
 async function handleAnonymousCommand(interaction) {
   if (!(await assertAnonymousCommand(interaction))) return;
 
@@ -1463,7 +1452,7 @@ async function handleAnonymousCommand(interaction) {
     assertAnonymousChannelPermissions(channel);
 
     await updateGuildSettings(interaction.guildId, { anonymousChannelId: channel.id });
-    await interaction.editReply(`${channel} 채널을 익명채팅방으로 설정했습니다. 이제 이 채널의 일반 메시지는 익명으로 다시 전송됩니다.`);
+    await interaction.editReply(`${channel} 채널을 익명채팅방으로 설정했습니다. 이제 ${channel} 채널에서만 \`/익명 전달내용:<내용>\`을 사용할 수 있습니다.`);
     return;
   }
 
@@ -1497,6 +1486,56 @@ async function handleAnonymousCommand(interaction) {
   }
 
   await interaction.editReply('지원하지 않는 익명채팅 명령입니다.');
+}
+
+async function handleClean(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageMessages);
+  if (!hasPermission) {
+    await interaction.reply({ content: '청소 명령어는 메시지 관리 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  if (!interaction.channel?.isTextBased() || !interaction.channel.messages) {
+    await interaction.reply({ content: '메시지를 청소할 수 있는 텍스트 채널에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const botPermissions = interaction.channel.permissionsFor(interaction.guild.members.me);
+  if (
+    !botPermissions?.has(PermissionsBitField.Flags.ViewChannel) ||
+    !botPermissions.has(PermissionsBitField.Flags.ManageMessages) ||
+    !botPermissions.has(PermissionsBitField.Flags.ReadMessageHistory)
+  ) {
+    await interaction.reply({ content: '봇에 채널 보기, 메시지 관리, 메시지 기록 보기 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const amount = interaction.options.getInteger('개수', true);
+  const targetUser = interaction.options.getUser('유저');
+  const fetchedMessages = await interaction.channel.messages.fetch({ limit: 100 });
+  const candidates = targetUser
+    ? fetchedMessages.filter((message) => message.author.id === targetUser.id)
+    : fetchedMessages;
+  const messagesToDelete = [...candidates.values()].slice(0, amount);
+
+  if (messagesToDelete.length === 0) {
+    await interaction.editReply(targetUser ? `${targetUser} 님의 최근 메시지를 찾지 못했습니다.` : '삭제할 최근 메시지를 찾지 못했습니다.');
+    return;
+  }
+
+  const deletedMessages = await interaction.channel.bulkDelete(messagesToDelete, true);
+  const skippedCount = messagesToDelete.length - deletedMessages.size;
+  const targetText = targetUser ? `${targetUser} 님의 ` : '';
+  const skippedText = skippedCount > 0 ? ` 14일이 지난 메시지 등 ${skippedCount}개는 삭제하지 못했습니다.` : '';
+
+  await interaction.editReply(`${targetText}메시지 ${deletedMessages.size}개를 청소했습니다.${skippedText}`);
 }
 
 async function handlePing(interaction) {
@@ -1735,6 +1774,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.anonymousMessage) {
+      await handleAnonymousMessage(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.clean) {
+      await handleClean(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.ping) {
       await handlePing(interaction);
       return;
@@ -1753,14 +1802,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.isRepliable()) {
       await interaction.reply({ content: `오류: ${message}`, ephemeral: true }).catch(() => null);
     }
-  }
-});
-
-client.on(Events.MessageCreate, async (message) => {
-  try {
-    await relayAnonymousMessage(message);
-  } catch (error) {
-    console.error(`익명채팅 이벤트 처리 실패: ${error.message}`);
   }
 });
 

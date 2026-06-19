@@ -14,6 +14,8 @@ export const commandNames = {
   attendance: '출석체크',
   warning: '경고',
   anonymous: '익명채팅',
+  anonymousMessage: '익명',
+  clean: '청소',
   ping: '핑'
 };
 
@@ -229,7 +231,7 @@ export function buildCommands() {
       .addSubcommand((subcommand) =>
         subcommand
           .setName('설정')
-          .setDescription('일반 메시지를 익명 메시지로 바꿔 보낼 채널을 지정합니다.')
+          .setDescription('/익명 명령어를 사용할 채널을 지정합니다.')
           .addChannelOption((option) =>
             option
               .setName('채널')
@@ -259,6 +261,40 @@ export function buildCommands() {
               .setRequired(true)
               .setMaxLength(40)
           )
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.anonymousMessage)
+      .setDescription('지정된 익명채팅방에서 익명 메시지를 보냅니다.')
+      .addStringOption((option) =>
+        option
+          .setName('전달내용')
+          .setDescription('익명으로 보낼 내용')
+          .setRequired(true)
+          .setMaxLength(1800)
+      )
+      .addAttachmentOption((option) =>
+        option
+          .setName('첨부파일')
+          .setDescription('익명 메시지에 함께 보낼 파일')
+          .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.clean)
+      .setDescription('현재 채널의 최근 메시지를 청소합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addIntegerOption((option) =>
+        option
+          .setName('개수')
+          .setDescription('삭제할 최근 메시지 수')
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(100)
+      )
+      .addUserOption((option) =>
+        option
+          .setName('유저')
+          .setDescription('특정 유저 메시지만 삭제하려면 선택하세요.')
+          .setRequired(false)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ping)
