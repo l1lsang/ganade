@@ -36,7 +36,7 @@ import { ensureUpdateCommand, syncAllCommands } from './sync-commands.js';
 assertRequiredConfig();
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 startHealthServer(client);
@@ -362,6 +362,13 @@ async function handleVerifyGuide(interaction) {
   });
 }
 
+async function handlePing(interaction) {
+  await interaction.reply({
+    content: `퐁! Discord 연결 정상입니다. 업타임 ${Math.round(process.uptime())}초`,
+    ephemeral: true
+  });
+}
+
 async function handleSettings(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
@@ -467,6 +474,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.ping) {
+      await handlePing(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.update) {
       await handleUpdate(interaction);
     }
@@ -483,4 +495,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-client.login(config.discordToken);
+client.on(Events.Error, (error) => {
+  console.error(`Discord client error: ${error.message}`);
+});
+
+client.on(Events.Warn, (warning) => {
+  console.warn(`Discord client warning: ${warning}`);
+});
+
+client.on(Events.ShardDisconnect, (event) => {
+  console.error(`Discord gateway disconnected: ${event.code} ${event.reason || ''}`.trim());
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  process.exitCode = 1;
+});
+
+client.login(config.discordToken).catch((error) => {
+  console.error(`Discord login failed: ${error.message}`);
+  process.exitCode = 1;
+});

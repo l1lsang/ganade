@@ -6,7 +6,8 @@ export const commandNames = {
   verify: '인증',
   religion: '종교선택',
   settings: '설정',
-  panel: '패널'
+  panel: '패널',
+  ping: '핑'
 };
 
 export function buildUpdateCommand() {
@@ -59,6 +60,9 @@ export function buildCommands() {
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
       ),
+    new SlashCommandBuilder()
+      .setName(commandNames.ping)
+      .setDescription('봇 응답 상태를 확인합니다.'),
     new SlashCommandBuilder()
       .setName(commandNames.verify)
       .setDescription('주민등록증 또는 고등학생 학생증과 인증 문구 종이를 제출합니다.')
