@@ -1326,6 +1326,19 @@ async function assertAnonymousCommand(interaction) {
   return true;
 }
 
+async function canTraceAnonymousUser(interaction) {
+  if (interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) {
+    return true;
+  }
+
+  const guildSettings = await getGuildSettings(interaction.guildId);
+  const adminRoleId = getConfiguredAdminRoleId(guildSettings);
+  if (!adminRoleId) return false;
+
+  const member = await fetchMember(interaction);
+  return member.roles.cache.has(adminRoleId);
+}
+
 function assertAnonymousChannelPermissions(channel) {
   const permissions = channel.permissionsFor(channel.guild.members.me);
   const requiredPermissions = [
@@ -1513,6 +1526,11 @@ async function handleAnonymousCommand(interaction) {
   }
 
   if (subcommand === '추적') {
+    if (!(await canTraceAnonymousUser(interaction))) {
+      await interaction.editReply('익명 작성자 추적은 서버 관리자 또는 설정된 관리자 역할만 사용할 수 있습니다.');
+      return;
+    }
+
     const rawCode = interaction.options.getString('코드', true);
     const traceResult = await traceAnonymousCode(interaction.guildId, rawCode);
 
