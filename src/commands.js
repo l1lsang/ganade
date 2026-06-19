@@ -15,6 +15,7 @@ export const commandNames = {
   warning: '경고',
   anonymous: '익명채팅',
   anonymousMessage: '익명',
+  selfIntroduction: '자기소개',
   level: '레벨',
   levelRanking: '랭킹',
   clean: '청소',
@@ -279,6 +280,17 @@ export function buildCommands() {
           .setName('첨부파일')
           .setDescription('익명 메시지에 함께 보낼 파일')
           .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.selfIntroduction)
+      .setDescription('자기소개 예시 임베드를 항상 아래에 표시할 채널을 설정합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName('채널')
+          .setDescription('자기소개 예시 임베드를 표시할 채널')
+          .setRequired(true)
+          .addChannelTypes(ChannelType.GuildText)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)

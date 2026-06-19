@@ -2,6 +2,10 @@ import { createServer } from 'node:http';
 import { ChannelType, PermissionsBitField } from 'discord.js';
 import { config } from './config.js';
 import { getLevelRanking, getLevelRules, getLevelSummary } from './level-system.js';
+import {
+  configureSelfIntroduction,
+  defaultSelfIntroduction
+} from './self-introduction.js';
 import { getGuildSettings, updateGuildSettings } from './settings.js';
 
 function readEnabled() {
@@ -188,7 +192,9 @@ async function handleGuildDetailApi(client, guildId, response) {
     guild: serializeGuild(guild),
     channels,
     welcome: settings.welcome || null,
-    leave: settings.leave || null
+    leave: settings.leave || null,
+    selfIntroduction: settings.selfIntroduction || null,
+    selfIntroductionDefaults: defaultSelfIntroduction
   });
 }
 
@@ -277,6 +283,21 @@ async function handleLeaveSaveApi(client, guildId, request, response) {
   sendJson(response, 200, { ok: true, leave: settings.leave });
 }
 
+async function handleSelfIntroductionSaveApi(client, guildId, request, response) {
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) {
+    sendJson(response, 404, { ok: false, error: 'guild_not_found' });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const result = await configureSelfIntroduction(guild, body);
+  sendJson(response, 200, {
+    ok: true,
+    selfIntroduction: result.settings
+  });
+}
+
 async function handleApiRequest(client, request, response, url) {
   if (!isAuthorized(request)) {
     sendJson(response, config.webAdminToken ? 401 : 503, {
@@ -312,6 +333,12 @@ async function handleApiRequest(client, request, response, url) {
   const leaveMatch = url.pathname.match(/^\/api\/guilds\/(\d+)\/leave$/);
   if (request.method === 'POST' && leaveMatch) {
     await handleLeaveSaveApi(client, leaveMatch[1], request, response);
+    return;
+  }
+
+  const selfIntroductionMatch = url.pathname.match(/^\/api\/guilds\/(\d+)\/self-introduction$/);
+  if (request.method === 'POST' && selfIntroductionMatch) {
+    await handleSelfIntroductionSaveApi(client, selfIntroductionMatch[1], request, response);
     return;
   }
 
@@ -469,6 +496,8 @@ export function buildAdminHtml() {
       background: #e5e7eb;
     }
     .preview-title { font-weight: 800; }
+    .preview-message { white-space: pre-wrap; }
+    .preview-footer { margin-top: 12px; font-size: 12px; }
     .ranking-panel { margin-top: 16px; }
     .ranking-head {
       display: flex;
@@ -644,6 +673,52 @@ export function buildAdminHtml() {
       </section>
     </section>
 
+    <section id="selfIntroductionPanel" class="panel ranking-panel hidden">
+      <div class="ranking-head">
+        <div>
+          <h2>자기소개 예시 임베드</h2>
+          <p>자기소개 채널의 안내 문구를 꾸밉니다. 저장하면 안내가 즉시 새 내용으로 다시 게시됩니다.</p>
+        </div>
+      </div>
+
+      <div class="split" style="margin-top:18px;">
+        <form id="selfIntroductionForm" class="subpanel">
+          <label for="selfIntroductionChannel">자기소개 채널</label>
+          <select id="selfIntroductionChannel" required></select>
+
+          <label class="check-row"><input id="selfIntroductionEnabled" type="checkbox" checked /> 반복 안내 사용</label>
+
+          <label for="selfIntroductionTitle">임베드 제목</label>
+          <input id="selfIntroductionTitle" maxlength="256" />
+
+          <label for="selfIntroductionDescription">자기소개 예시 내용</label>
+          <textarea id="selfIntroductionDescription" maxlength="4096" style="min-height:190px;"></textarea>
+
+          <label for="selfIntroductionFooter">하단 안내 문구</label>
+          <input id="selfIntroductionFooter" maxlength="2048" />
+
+          <label for="selfIntroductionColor">임베드 색상</label>
+          <input id="selfIntroductionColor" type="color" value="#5865f2" />
+
+          <div class="row" style="margin-top:16px;">
+            <button type="submit">자기소개 설정 저장</button>
+            <button id="selfIntroductionPreviewButton" class="secondary" type="button">미리보기</button>
+          </div>
+        </form>
+
+        <div class="subpanel">
+          <h2>Discord 미리보기</h2>
+          <div id="selfIntroductionPreview" class="preview">
+            <div id="selfIntroductionPreviewTitle" class="preview-title"></div>
+            <p id="selfIntroductionPreviewDescription" class="preview-message"></p>
+            <p id="selfIntroductionPreviewFooter" class="preview-footer"></p>
+          </div>
+          <p style="margin-top:12px;">멤버가 이 채널에 메시지를 올릴 때마다 기존 안내는 지워지고 이 임베드가 맨 아래에 다시 표시됩니다.</p>
+        </div>
+      </div>
+      <div id="selfIntroductionStatus" class="status"></div>
+    </section>
+
     <section id="rankingPanel" class="panel ranking-panel hidden">
       <div class="ranking-head">
         <div>
@@ -685,7 +760,14 @@ export function buildAdminHtml() {
   </main>
 
   <script>
-    const state = { guilds: [], guild: null, channels: [], rankingType: 'overall', rankingRequestId: 0 };
+    const state = {
+      guilds: [],
+      guild: null,
+      channels: [],
+      selfIntroductionDefaults: null,
+      rankingType: 'overall',
+      rankingRequestId: 0
+    };
     const els = {
       token: document.getElementById('token'),
       saveToken: document.getElementById('saveToken'),
@@ -723,6 +805,20 @@ export function buildAdminHtml() {
       previewMessage: document.getElementById('previewMessage'),
       welcomePreviewButton: document.getElementById('welcomePreviewButton'),
       leavePreviewButton: document.getElementById('leavePreviewButton'),
+      selfIntroductionPanel: document.getElementById('selfIntroductionPanel'),
+      selfIntroductionForm: document.getElementById('selfIntroductionForm'),
+      selfIntroductionChannel: document.getElementById('selfIntroductionChannel'),
+      selfIntroductionEnabled: document.getElementById('selfIntroductionEnabled'),
+      selfIntroductionTitle: document.getElementById('selfIntroductionTitle'),
+      selfIntroductionDescription: document.getElementById('selfIntroductionDescription'),
+      selfIntroductionFooter: document.getElementById('selfIntroductionFooter'),
+      selfIntroductionColor: document.getElementById('selfIntroductionColor'),
+      selfIntroductionPreview: document.getElementById('selfIntroductionPreview'),
+      selfIntroductionPreviewTitle: document.getElementById('selfIntroductionPreviewTitle'),
+      selfIntroductionPreviewDescription: document.getElementById('selfIntroductionPreviewDescription'),
+      selfIntroductionPreviewFooter: document.getElementById('selfIntroductionPreviewFooter'),
+      selfIntroductionPreviewButton: document.getElementById('selfIntroductionPreviewButton'),
+      selfIntroductionStatus: document.getElementById('selfIntroductionStatus'),
       rankingPanel: document.getElementById('rankingPanel'),
       rankingDescription: document.getElementById('rankingDescription'),
       refreshRanking: document.getElementById('refreshRanking'),
@@ -803,6 +899,37 @@ export function buildAdminHtml() {
         emojiText: els[prefix + 'EmojiText'].value,
         embedColor: els[prefix + 'EmbedColor'].value
       };
+    }
+
+    function applySelfIntroduction(settings) {
+      const defaults = state.selfIntroductionDefaults || {};
+      els.selfIntroductionEnabled.checked = settings?.enabled !== false;
+      els.selfIntroductionChannel.value = settings?.channelId || '';
+      els.selfIntroductionTitle.value = settings?.title ?? defaults.title ?? '';
+      els.selfIntroductionDescription.value = settings?.description ?? defaults.description ?? '';
+      els.selfIntroductionFooter.value = settings?.footer ?? defaults.footer ?? '';
+      els.selfIntroductionColor.value = settings?.color || defaults.color || '#5865f2';
+      els.selfIntroductionChannel.required = els.selfIntroductionEnabled.checked;
+      renderSelfIntroductionPreview();
+    }
+
+    function collectSelfIntroduction() {
+      return {
+        enabled: els.selfIntroductionEnabled.checked,
+        channelId: els.selfIntroductionChannel.value,
+        title: els.selfIntroductionTitle.value,
+        description: els.selfIntroductionDescription.value,
+        footer: els.selfIntroductionFooter.value,
+        color: els.selfIntroductionColor.value
+      };
+    }
+
+    function renderSelfIntroductionPreview() {
+      const data = collectSelfIntroduction();
+      els.selfIntroductionPreview.style.borderLeftColor = data.color;
+      els.selfIntroductionPreviewTitle.textContent = data.title || '제목 없음';
+      els.selfIntroductionPreviewDescription.textContent = data.description || '내용 없음';
+      els.selfIntroductionPreviewFooter.textContent = data.footer;
     }
 
     function renderPreview(prefix = 'welcome') {
@@ -976,6 +1103,7 @@ export function buildAdminHtml() {
       const data = await api('/api/guilds/' + guildId);
       state.guild = data.guild;
       state.channels = data.channels;
+      state.selfIntroductionDefaults = data.selfIntroductionDefaults;
       els.selectedGuild.textContent = state.guild.name + ' 설정 중';
       const channelOptions = '<option value="">채널 선택</option>' + state.channels.map((channel) => {
         const label = channel.parentName ? channel.parentName + ' / #' + channel.name : '#' + channel.name;
@@ -983,6 +1111,7 @@ export function buildAdminHtml() {
       }).join('');
       els.welcomeChannel.innerHTML = channelOptions;
       els.leaveChannel.innerHTML = channelOptions;
+      els.selfIntroductionChannel.innerHTML = channelOptions;
       els.logForms.classList.remove('hidden');
       applyLog('welcome', data.welcome, {
         title: '{memberCount}번째 멤버가 입장했어요',
@@ -994,8 +1123,10 @@ export function buildAdminHtml() {
         message: '',
         color: '#ed4245'
       });
+      applySelfIntroduction(data.selfIntroduction);
       renderPreview('welcome');
       renderGuilds();
+      els.selfIntroductionPanel.classList.remove('hidden');
       els.rankingPanel.classList.remove('hidden');
       await loadRanking(state.rankingType);
       setStatus(els.rightStatus, '설정을 불러왔습니다.', 'ok');
@@ -1050,8 +1181,44 @@ export function buildAdminHtml() {
         .catch((error) => setStatus(els.rightStatus, error.message, 'error'));
     });
 
+    els.selfIntroductionForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!state.guild) return;
+      setStatus(els.selfIntroductionStatus, '자기소개 설정 저장 중...');
+      api('/api/guilds/' + state.guild.id + '/self-introduction', {
+        method: 'POST',
+        body: JSON.stringify(collectSelfIntroduction())
+      })
+        .then((data) => {
+          applySelfIntroduction(data.selfIntroduction);
+          setStatus(
+            els.selfIntroductionStatus,
+            data.selfIntroduction.enabled
+              ? '설정을 저장하고 자기소개 안내를 다시 게시했습니다.'
+              : '자기소개 반복 안내를 껐습니다.',
+            'ok'
+          );
+        })
+        .catch((error) => setStatus(els.selfIntroductionStatus, error.message, 'error'));
+    });
+
     els.welcomePreviewButton.addEventListener('click', () => renderPreview('welcome'));
     els.leavePreviewButton.addEventListener('click', () => renderPreview('leave'));
+    els.selfIntroductionPreviewButton.addEventListener('click', renderSelfIntroductionPreview);
+    els.selfIntroductionEnabled.addEventListener('change', () => {
+      els.selfIntroductionChannel.required = els.selfIntroductionEnabled.checked;
+      renderSelfIntroductionPreview();
+    });
+    [
+      els.selfIntroductionChannel,
+      els.selfIntroductionTitle,
+      els.selfIntroductionDescription,
+      els.selfIntroductionFooter,
+      els.selfIntroductionColor
+    ].forEach((el) => {
+      el.addEventListener('input', renderSelfIntroductionPreview);
+      el.addEventListener('change', renderSelfIntroductionPreview);
+    });
     ['input', 'change'].forEach((eventName) => {
       [
         els.welcomeEnabled, els.welcomeUseEmbed, els.welcomeShowProfileImage, els.welcomeMentionUser, els.welcomeShowInviter,

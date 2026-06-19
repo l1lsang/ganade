@@ -49,4 +49,6 @@ test('관리 UI의 내장 스크립트와 랭킹 마크업이 유효하다', asy
   assert.match(html, /id="rankingPanel"/);
   assert.match(html, /data-ranking-type="voice"/);
   assert.match(html, /id="rankingBody"/);
+  assert.match(html, /id="selfIntroductionForm"/);
+  assert.match(html, /\/self-introduction/);
 });

@@ -50,6 +50,10 @@ import {
   sanitizeReligionName
 } from './roles.js';
 import { getGuildSettings, updateGuildSettings } from './settings.js';
+import {
+  configureSelfIntroduction,
+  refreshSelfIntroductionAfterMessage
+} from './self-introduction.js';
 import { ensureUpdateCommand, syncAllCommands } from './sync-commands.js';
 import {
   addWarning,
@@ -1860,6 +1864,30 @@ async function handleSettings(interaction) {
   await interaction.editReply(`설정을 저장했습니다.\n${formatConfiguredSettings(guildSettings)}`);
 }
 
+async function handleSelfIntroduction(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) {
+    await interaction.reply({ content: '자기소개 채널 설정은 서버 관리 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  const channel = interaction.options.getChannel('채널', true);
+  await configureSelfIntroduction(interaction.guild, {
+    enabled: true,
+    channelId: channel.id
+  });
+
+  await interaction.editReply(
+    `${channel} 채널에 자기소개 예시 임베드를 표시했습니다. `
+    + '이제 멤버가 메시지를 작성할 때마다 안내가 채널 맨 아래에 다시 표시됩니다.'
+  );
+}
+
 function serializeInvite(invite) {
   return {
     code: invite.code,
@@ -1957,6 +1985,12 @@ client.on(Events.MessageCreate, async (message) => {
     );
   } catch (error) {
     console.error(`채팅 레벨 기록 실패 (${message.guildId}/${message.author.id}): ${error.message}`);
+  }
+
+  try {
+    await refreshSelfIntroductionAfterMessage(message);
+  } catch (error) {
+    console.error(`자기소개 안내 갱신 실패 (${message.guildId}/${message.channelId}): ${error.message}`);
   }
 });
 
@@ -2090,6 +2124,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.anonymousMessage) {
       await handleAnonymousMessage(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.selfIntroduction) {
+      await handleSelfIntroduction(interaction);
       return;
     }
 
