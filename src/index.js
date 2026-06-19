@@ -13,6 +13,11 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from 'discord.js';
+import {
+  getAttendanceRanking,
+  registerAttendance,
+  resetGuildAttendance
+} from './attendance.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
 import { startHealthServer } from './health-server.js';
@@ -882,6 +887,128 @@ async function handleMbtiCommand(interaction) {
   await interaction.editReply(`MBTI 패널을 ${channel} 채널에 보냈습니다.\n${formatConfiguredSettings(guildSettings)}`);
 }
 
+function getAttendanceDisplayName(interaction) {
+  return interaction.member?.displayName || interaction.member?.nick || interaction.user.globalName || interaction.user.username;
+}
+
+function buildAttendanceEmbed(interaction, result) {
+  const displayName = getAttendanceDisplayName(interaction);
+  const description = result.alreadyChecked
+    ? [
+        `${interaction.user} 오늘은 이미 발도장 콕 찍었듀!`,
+        `${result.streak}일째 출석!! 내일도 또 와주면 꼬리 왕왕 흔들겠듀.`
+      ]
+    : [
+        `${interaction.user} ${displayName}님, 오늘 출석 발도장 콕 찍었듀!`,
+        `${result.streak}일째 출석!! 듀 가나디가 아주 뿌듯하듀.`
+      ];
+
+  return new EmbedBuilder()
+    .setTitle(result.alreadyChecked ? '이미 출석했듀' : '출석 완료했듀')
+    .setDescription(description.join('\n'))
+    .setColor(result.alreadyChecked ? 0xfee75c : 0x57f287)
+    .addFields(
+      {
+        name: '누적 출석',
+        value: `${result.total}회`,
+        inline: true
+      },
+      {
+        name: '연속 출석',
+        value: `${result.streak}일`,
+        inline: true
+      },
+      {
+        name: '최고 연속',
+        value: `${result.bestStreak}일`,
+        inline: true
+      }
+    )
+    .setFooter({ text: `기준 날짜: ${result.date} (KST)` })
+    .setTimestamp();
+}
+
+function buildAttendanceRankingEmbed(ranking) {
+  const lines = ranking.map((entry, index) =>
+    `**${index + 1}위** <@${entry.userId}> - 누적 ${entry.total}회 / 연속 ${entry.streak}일 / 최고 ${entry.bestStreak}일`
+  );
+
+  return new EmbedBuilder()
+    .setTitle('출석 랭킹')
+    .setDescription(lines.join('\n'))
+    .setColor(0x5865f2)
+    .setFooter({ text: '누적 출석 횟수 기준 TOP 10' })
+    .setTimestamp();
+}
+
+async function handleAttendanceCheck(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const result = await registerAttendance(interaction.guildId, interaction.user.id);
+  await interaction.editReply({
+    embeds: [buildAttendanceEmbed(interaction, result)]
+  });
+}
+
+async function handleAttendanceRanking(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const ranking = await getAttendanceRanking(interaction.guildId, 10);
+  if (ranking.length === 0) {
+    await interaction.editReply('아직 출석한 사람이 없듀. `/출석체크`로 첫 발도장을 찍어보듀!');
+    return;
+  }
+
+  await interaction.editReply({
+    embeds: [buildAttendanceRankingEmbed(ranking)],
+    allowedMentions: { users: [], roles: [] }
+  });
+}
+
+async function handleAttendanceReset(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+  if (!hasPermission) {
+    await interaction.reply({ content: '출석 초기화는 서버 관리 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  await resetGuildAttendance(interaction.guildId);
+  await interaction.editReply('출석부를 초기화했듀. 오늘부터 다시 1일째 출석!! 시작할 수 있듀.');
+}
+
+async function handleAttendance(interaction) {
+  const action = interaction.options.getString('작업') || 'check';
+
+  if (action === 'ranking') {
+    await handleAttendanceRanking(interaction);
+    return;
+  }
+
+  if (action === 'reset') {
+    await handleAttendanceReset(interaction);
+    return;
+  }
+
+  await handleAttendanceCheck(interaction);
+}
+
 async function handlePing(interaction) {
   await interaction.reply({
     content: `퐁! Discord 연결 정상입니다. 업타임 ${Math.round(process.uptime())}초`,
@@ -1100,6 +1227,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.addEmoji) {
       await handleAddEmoji(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.attendance) {
+      await handleAttendance(interaction);
       return;
     }
 

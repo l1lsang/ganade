@@ -11,6 +11,7 @@ export const commandNames = {
   religionPanel: '종교패널',
   mbti: 'mbti',
   addEmoji: '이모지추가',
+  attendance: '출석체크',
   ping: '핑'
 };
 
@@ -132,6 +133,20 @@ export function buildCommands() {
           .setRequired(false)
           .setMinLength(2)
           .setMaxLength(32)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.attendance)
+      .setDescription('출석체크를 하고 출석 랭킹을 확인합니다.')
+      .addStringOption((option) =>
+        option
+          .setName('작업')
+          .setDescription('실행할 작업, 비워두면 바로 출석합니다.')
+          .setRequired(false)
+          .addChoices(
+            { name: '출석하기', value: 'check' },
+            { name: '출석 랭킹', value: 'ranking' },
+            { name: '출석 초기화', value: 'reset' }
+          )
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ping)
