@@ -22,6 +22,12 @@ npm start
 
 서버 안에서 UI 패널을 쓰려면 `/패널`을 실행하세요. 패널에는 인증 안내 버튼, 종교 선택 드롭다운, 종교 직접 입력 버튼이 표시됩니다.
 
+## Render 배포
+
+Render Web Service로 배포하면 봇이 `PORT` 환경변수 포트에서 health 서버를 함께 엽니다. Build Command는 `npm install`, Start Command는 `npm start`로 설정하세요. Health Check Path는 `/health`를 사용할 수 있습니다.
+
+Discord 봇만 장시간 실행할 목적이라면 Render Background Worker로 배포하는 방식도 맞습니다. Web Service를 계속 사용할 경우에는 이 health 서버가 Render의 포트 감지 요구사항을 만족합니다.
+
 ## 명령어
 
 - `/인증 사진:<첨부파일>`: 주민등록증 또는 고등학생 학생증과 `돌아갈래` 문구 종이가 함께 보이면 인증 역할 지급

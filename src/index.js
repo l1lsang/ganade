@@ -16,6 +16,7 @@ import {
 } from 'discord.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
+import { startHealthServer } from './health-server.js';
 import {
   analyzeVerificationImage,
   getVerificationApprovalLabel,
@@ -37,6 +38,8 @@ assertRequiredConfig();
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
+
+startHealthServer(client);
 
 const openai = new OpenAI({
   apiKey: config.openaiApiKey
