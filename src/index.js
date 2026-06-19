@@ -1,10 +1,18 @@
 import OpenAI from 'openai';
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
+  EmbedBuilder,
   Events,
   GatewayIntentBits,
-  PermissionsBitField
+  ModalBuilder,
+  PermissionsBitField,
+  StringSelectMenuBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } from 'discord.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
@@ -33,6 +41,14 @@ const client = new Client({
 const openai = new OpenAI({
   apiKey: config.openaiApiKey
 });
+
+const customIds = {
+  verifyGuide: 'verify:start',
+  religionSelect: 'religion:select',
+  religionCustomButton: 'religion:custom',
+  religionCustomModal: 'religion:custom:modal',
+  religionCustomInput: 'religion_name'
+};
 
 function isAllowedImage(attachment) {
   const contentType = attachment.contentType?.toLowerCase() || '';
@@ -83,6 +99,65 @@ async function attachmentToDataUrl(attachment) {
 
 async function fetchMember(interaction) {
   return interaction.guild.members.fetch(interaction.user.id);
+}
+
+function buildPanelPayload() {
+  const embed = new EmbedBuilder()
+    .setTitle('인증 및 역할 선택')
+    .setDescription([
+      `주민등록증 또는 고등학생 학생증과 "${config.requiredPhrase}" 문구 종이를 준비해 주세요.`,
+      '아래에서 인증 안내를 확인하고, 종교 역할은 드롭다운 또는 직접 입력으로 선택할 수 있습니다.'
+    ].join('\n'))
+    .setColor(0x5865f2);
+
+  const verifyRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(customIds.verifyGuide)
+      .setLabel('인증 시작')
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const religionOptions = config.religionChoices.map((name) => ({
+    label: name,
+    value: name
+  }));
+
+  const religionSelectRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(customIds.religionSelect)
+      .setPlaceholder('종교 역할 선택')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(religionOptions)
+  );
+
+  const customReligionRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(customIds.religionCustomButton)
+      .setLabel('종교 직접 입력')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  return {
+    embeds: [embed],
+    components: [verifyRow, religionSelectRow, customReligionRow]
+  };
+}
+
+function buildCustomReligionModal() {
+  const input = new TextInputBuilder()
+    .setCustomId(customIds.religionCustomInput)
+    .setLabel('종교 이름')
+    .setPlaceholder('목록에 없는 종교를 입력하세요')
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(30)
+    .setStyle(TextInputStyle.Short);
+
+  return new ModalBuilder()
+    .setCustomId(customIds.religionCustomModal)
+    .setTitle('종교 직접 입력')
+    .addComponents(new ActionRowBuilder().addComponents(input));
 }
 
 function getConfiguredLogChannelId(guildSettings) {
@@ -179,11 +254,41 @@ async function handleReligion(interaction) {
     return;
   }
 
+  const role = await applyReligionRole(interaction, rawName);
+  await interaction.editReply(`"${role.name}" 역할을 지급했습니다.`);
+}
+
+async function applyReligionRole(interaction, rawName) {
   const religionName = sanitizeReligionName(rawName);
   const role = await getOrCreateReligionRole(interaction.guild, religionName);
   const member = await fetchMember(interaction);
 
   await replaceReligionRole(member, role);
+  return role;
+}
+
+async function handleReligionSelect(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const role = await applyReligionRole(interaction, interaction.values[0]);
+  await interaction.editReply(`"${role.name}" 역할을 지급했습니다.`);
+}
+
+async function handleCustomReligionModal(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const rawName = interaction.fields.getTextInputValue(customIds.religionCustomInput);
+  const role = await applyReligionRole(interaction, rawName);
   await interaction.editReply(`"${role.name}" 역할을 지급했습니다.`);
 }
 
@@ -209,6 +314,49 @@ async function handleUpdate(interaction) {
 
   const target = result.scope === 'global' ? '전역' : '현재 서버';
   await interaction.editReply(`${target} 명령어 ${result.count}개를 동기화했습니다.`);
+}
+
+async function handlePanel(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+  if (!hasPermission) {
+    await interaction.reply({ content: '패널 생성은 서버 관리 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = interaction.options.getChannel('채널') || interaction.channel;
+
+  if (!targetChannel?.isTextBased()) {
+    throw new Error('패널을 보낼 텍스트 채널을 찾을 수 없습니다.');
+  }
+
+  await targetChannel.send(buildPanelPayload());
+  await interaction.editReply(`${targetChannel} 채널에 인증 UI 패널을 보냈습니다.`);
+}
+
+async function handleVerifyGuide(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.reply({
+    content: [
+      '인증 사진 제출은 개인정보 보호를 위해 슬래시 명령어 첨부 방식으로 진행합니다.',
+      `1. 주민등록증 또는 고등학생 학생증과 "${config.requiredPhrase}" 문구가 적힌 종이를 함께 촬영해 주세요.`,
+      '2. `/인증` 명령어를 선택하고 `사진` 옵션에 이미지를 첨부해 주세요.',
+      '3. 통과하면 설정된 인증 역할이 자동으로 지급됩니다.',
+      '',
+      '사진 파일은 봇이 저장하지 않고 분석에만 사용합니다.'
+    ].join('\n'),
+    ephemeral: true
+  });
 }
 
 async function handleSettings(interaction) {
@@ -271,9 +419,31 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
   try {
+    if (interaction.isButton()) {
+      if (interaction.customId === customIds.verifyGuide) {
+        await handleVerifyGuide(interaction);
+        return;
+      }
+
+      if (interaction.customId === customIds.religionCustomButton) {
+        await interaction.showModal(buildCustomReligionModal());
+        return;
+      }
+    }
+
+    if (interaction.isStringSelectMenu() && interaction.customId === customIds.religionSelect) {
+      await handleReligionSelect(interaction);
+      return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === customIds.religionCustomModal) {
+      await handleCustomReligionModal(interaction);
+      return;
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+
     if (interaction.commandName === commandNames.verify) {
       await handleVerify(interaction);
       return;
@@ -289,16 +459,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.panel) {
+      await handlePanel(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.update) {
       await handleUpdate(interaction);
     }
   } catch (error) {
-    console.error(`명령어 처리 실패 (${interaction.commandName}): ${error.message}`);
+    const interactionName = interaction.commandName || interaction.customId || interaction.type;
+    console.error(`상호작용 처리 실패 (${interactionName}): ${error.message}`);
 
     const message = error.message || '처리 중 오류가 발생했습니다.';
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(`오류: ${message}`).catch(() => null);
-    } else {
+    } else if (interaction.isRepliable()) {
       await interaction.reply({ content: `오류: ${message}`, ephemeral: true }).catch(() => null);
     }
   }

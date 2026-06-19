@@ -5,7 +5,8 @@ export const commandNames = {
   update: '업데이트',
   verify: '인증',
   religion: '종교선택',
-  settings: '설정'
+  settings: '설정',
+  panel: '패널'
 };
 
 export function buildUpdateCommand() {
@@ -44,6 +45,17 @@ export function buildCommands() {
         option
           .setName('로그채널')
           .setDescription('인증 결과 로그를 보낼 채널')
+          .setRequired(false)
+          .addChannelTypes(ChannelType.GuildText)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.panel)
+      .setDescription('인증과 종교 선택을 진행할 수 있는 UI 패널을 보냅니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName('채널')
+          .setDescription('패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
       ),
