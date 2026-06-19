@@ -12,6 +12,7 @@ export const commandNames = {
   mbti: 'mbti',
   addEmoji: '이모지추가',
   attendance: '출석체크',
+  warning: '경고',
   ping: '핑'
 };
 
@@ -146,6 +147,78 @@ export function buildCommands() {
             { name: '출석하기', value: 'check' },
             { name: '출석 랭킹', value: 'ranking' },
             { name: '출석 초기화', value: 'reset' }
+          )
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.warning)
+      .setDescription('경고를 지급, 회수, 조회하고 자동 밴 기준을 설정합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('지급')
+          .setDescription('유저에게 경고를 1회 지급합니다.')
+          .addUserOption((option) =>
+            option
+              .setName('유저')
+              .setDescription('경고를 지급할 유저')
+              .setRequired(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('사유')
+              .setDescription('경고 사유')
+              .setRequired(false)
+              .setMaxLength(300)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('회수')
+          .setDescription('유저의 경고를 회수합니다.')
+          .addUserOption((option) =>
+            option
+              .setName('유저')
+              .setDescription('경고를 회수할 유저')
+              .setRequired(true)
+          )
+          .addIntegerOption((option) =>
+            option
+              .setName('개수')
+              .setDescription('회수할 경고 수, 기본값은 1회')
+              .setRequired(false)
+              .setMinValue(1)
+              .setMaxValue(50)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('사유')
+              .setDescription('회수 사유')
+              .setRequired(false)
+              .setMaxLength(300)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('기록')
+          .setDescription('경고 전체 기록 또는 특정 유저 기록을 파일로 확인합니다.')
+          .addUserOption((option) =>
+            option
+              .setName('유저')
+              .setDescription('특정 유저만 확인하려면 선택하세요.')
+              .setRequired(false)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('설정')
+          .setDescription('경고 자동 영구 밴 기준 횟수를 설정합니다.')
+          .addIntegerOption((option) =>
+            option
+              .setName('자동밴횟수')
+              .setDescription('이 횟수 이상 경고가 쌓이면 영구 밴합니다.')
+              .setRequired(true)
+              .setMinValue(1)
+              .setMaxValue(100)
           )
       ),
     new SlashCommandBuilder()

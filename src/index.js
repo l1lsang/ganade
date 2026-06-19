@@ -1,5 +1,6 @@
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -35,6 +36,15 @@ import {
 } from './roles.js';
 import { getGuildSettings, updateGuildSettings } from './settings.js';
 import { ensureUpdateCommand, syncAllCommands } from './sync-commands.js';
+import {
+  addWarning,
+  addWarningBanRecord,
+  buildWarningHistoryText,
+  getWarningHistory,
+  getWarningSummary,
+  removeWarnings,
+  setWarningBanThreshold
+} from './warnings.js';
 
 assertRequiredConfig();
 
@@ -1009,6 +1019,213 @@ async function handleAttendance(interaction) {
   await handleAttendanceCheck(interaction);
 }
 
+async function assertWarningCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return false;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.BanMembers);
+  if (!hasPermission) {
+    await interaction.reply({ content: '경고 관리는 멤버 밴 권한이 필요합니다.', ephemeral: true });
+    return false;
+  }
+
+  return true;
+}
+
+async function fetchTargetMember(interaction, user) {
+  return interaction.guild.members.fetch(user.id).catch(() => null);
+}
+
+async function assertCanModerateTarget(interaction, targetUser, targetMember) {
+  if (targetUser.id === interaction.user.id) {
+    throw new Error('자기 자신에게는 경고를 지급하거나 자동 밴할 수 없습니다.');
+  }
+
+  if (targetUser.id === interaction.guild.ownerId) {
+    throw new Error('서버 소유자는 경고 자동 밴 대상으로 지정할 수 없습니다.');
+  }
+
+  const moderatorMember = await interaction.guild.members.fetch(interaction.user.id);
+  if (
+    targetMember &&
+    interaction.guild.ownerId !== interaction.user.id &&
+    targetMember.roles.highest.comparePositionTo(moderatorMember.roles.highest) >= 0
+  ) {
+    throw new Error('나와 같거나 더 높은 역할의 유저에게는 경고를 지급할 수 없습니다.');
+  }
+}
+
+async function assertCanAutoBanTarget(interaction, targetUser, targetMember) {
+  if (!interaction.guild.members.me.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+    throw new Error('봇에 Ban Members 권한이 없어 자동 영구 밴을 할 수 없습니다.');
+  }
+
+  if (targetUser.id === client.user.id) {
+    throw new Error('봇 자신은 자동 밴 대상으로 지정할 수 없습니다.');
+  }
+
+  if (targetMember && !targetMember.bannable) {
+    throw new Error('봇 역할이 대상보다 낮거나 권한이 부족해서 자동 영구 밴을 할 수 없습니다.');
+  }
+}
+
+function buildWarningEmbed(targetUser, result, title, color) {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setColor(color)
+    .addFields(
+      {
+        name: '대상',
+        value: `${targetUser} (${targetUser.tag || targetUser.username})`,
+        inline: false
+      },
+      {
+        name: '현재 경고',
+        value: `${result.activeCount}/${result.threshold}회`,
+        inline: true
+      },
+      {
+        name: '누적 지급',
+        value: `${result.totalIssued}회`,
+        inline: true
+      }
+    )
+    .setTimestamp();
+}
+
+async function handleWarningIssue(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetUser = interaction.options.getUser('유저', true);
+  const reason = interaction.options.getString('사유') || '사유 없음';
+  const targetMember = await fetchTargetMember(interaction, targetUser);
+
+  await assertCanModerateTarget(interaction, targetUser, targetMember);
+
+  const before = await getWarningSummary(interaction.guildId, targetUser.id);
+  const willAutoBan = before.threshold > 0 && before.activeCount + 1 >= before.threshold;
+
+  if (willAutoBan) {
+    await assertCanAutoBanTarget(interaction, targetUser, targetMember);
+  }
+
+  const result = await addWarning(interaction.guildId, targetUser.id, interaction.user.id, reason);
+  const embed = buildWarningEmbed(targetUser, result, '경고를 지급했습니다.', 0xfee75c)
+    .addFields({
+      name: '사유',
+      value: reason,
+      inline: false
+    });
+
+  if (!result.shouldBan) {
+    await interaction.editReply({ embeds: [embed] });
+    return;
+  }
+
+  const banReason = `경고 ${result.activeCount}/${result.threshold}회 누적: ${reason} | 처리자: ${interaction.user.tag}`;
+  await interaction.guild.members.ban(targetUser.id, { reason: banReason });
+  await addWarningBanRecord(interaction.guildId, targetUser.id, interaction.user.id, banReason, result.threshold);
+
+  embed
+    .setTitle('경고 기준 도달로 영구 밴했습니다.')
+    .setColor(0xed4245)
+    .addFields({
+      name: '자동 조치',
+      value: `${result.threshold}회 기준에 도달해서 영구 밴했습니다.`,
+      inline: false
+    });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleWarningRemove(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetUser = interaction.options.getUser('유저', true);
+  const amount = interaction.options.getInteger('개수') || 1;
+  const reason = interaction.options.getString('사유') || '사유 없음';
+  const before = await getWarningSummary(interaction.guildId, targetUser.id);
+
+  if (before.activeCount < 1) {
+    await interaction.editReply(`${targetUser} 님은 현재 회수할 경고가 없습니다.`);
+    return;
+  }
+
+  const result = await removeWarnings(interaction.guildId, targetUser.id, interaction.user.id, amount, reason);
+  const embed = buildWarningEmbed(targetUser, result, '경고를 회수했습니다.', 0x57f287)
+    .addFields(
+      {
+        name: '회수한 경고',
+        value: `${result.removedAmount}회`,
+        inline: true
+      },
+      {
+        name: '사유',
+        value: reason,
+        inline: false
+      }
+    );
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleWarningHistory(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetUser = interaction.options.getUser('유저');
+  const history = await getWarningHistory(interaction.guildId, targetUser?.id || null);
+  const historyText = buildWarningHistoryText(interaction.guild, history, targetUser);
+  const suffix = targetUser ? targetUser.id : 'all';
+  const attachment = new AttachmentBuilder(Buffer.from(historyText, 'utf8'), {
+    name: `warning-history-${interaction.guildId}-${suffix}.txt`
+  });
+
+  await interaction.editReply({
+    content: targetUser ? `${targetUser} 님의 경고 기록입니다.` : '서버 전체 경고 기록입니다.',
+    files: [attachment],
+    allowedMentions: { users: [], roles: [] }
+  });
+}
+
+async function handleWarningSettings(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const threshold = interaction.options.getInteger('자동밴횟수', true);
+  const result = await setWarningBanThreshold(interaction.guildId, interaction.user.id, threshold);
+
+  await interaction.editReply(`경고 자동 영구 밴 기준을 ${result.threshold}회로 설정했습니다.`);
+}
+
+async function handleWarning(interaction) {
+  if (!(await assertWarningCommand(interaction))) return;
+
+  const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === '지급') {
+    await handleWarningIssue(interaction);
+    return;
+  }
+
+  if (subcommand === '회수') {
+    await handleWarningRemove(interaction);
+    return;
+  }
+
+  if (subcommand === '기록') {
+    await handleWarningHistory(interaction);
+    return;
+  }
+
+  if (subcommand === '설정') {
+    await handleWarningSettings(interaction);
+    return;
+  }
+
+  await interaction.reply({ content: '지원하지 않는 경고 명령입니다.', ephemeral: true });
+}
+
 async function handlePing(interaction) {
   await interaction.reply({
     content: `퐁! Discord 연결 정상입니다. 업타임 ${Math.round(process.uptime())}초`,
@@ -1232,6 +1449,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.attendance) {
       await handleAttendance(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.warning) {
+      await handleWarning(interaction);
       return;
     }
 
