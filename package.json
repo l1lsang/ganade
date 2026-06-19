@@ -1,7 +1,7 @@
 {
   "name": "babo-verification-bot",
   "version": "1.0.0",
-  "description": "Discord role verification bot using OpenAI vision checks.",
+  "description": "Discord manual verification ticket and role selection bot.",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

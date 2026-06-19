@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -18,15 +17,14 @@ import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
 import { startHealthServer } from './health-server.js';
 import {
-  analyzeVerificationImage,
-  getVerificationApprovalLabel,
-  isVerificationApproved
-} from './openaiVerify.js';
-import {
   assertCanManageRoles,
   assertRoleAssignable,
+  getMbtiAxis,
+  getOrCreateMbtiRole,
   getOrCreateReligionRole,
   getOrCreateVerifiedRole,
+  mbtiAxes,
+  replaceMbtiAxisRole,
   replaceReligionRole,
   sanitizeReligionName
 } from './roles.js';
@@ -36,69 +34,21 @@ import { ensureUpdateCommand, syncAllCommands } from './sync-commands.js';
 assertRequiredConfig();
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
 });
 
 startHealthServer(client);
 
-const openai = new OpenAI({
-  apiKey: config.openaiApiKey
-});
-
 const customIds = {
   verifyGuide: 'verify:start',
+  ticketApprove: 'ticket:approve',
+  ticketClose: 'ticket:close',
   religionSelect: 'religion:select',
   religionCustomButton: 'religion:custom',
   religionCustomModal: 'religion:custom:modal',
-  religionCustomInput: 'religion_name'
+  religionCustomInput: 'religion_name',
+  mbtiPrefix: 'mbti:'
 };
-
-function isAllowedImage(attachment) {
-  const contentType = attachment.contentType?.toLowerCase() || '';
-  const filename = attachment.name?.toLowerCase() || '';
-
-  return (
-    contentType.startsWith('image/') ||
-    /\.(png|jpe?g|webp|gif)$/.test(filename)
-  );
-}
-
-function getMimeType(attachment) {
-  if (attachment.contentType?.startsWith('image/')) {
-    return attachment.contentType.split(';')[0];
-  }
-
-  const filename = attachment.name?.toLowerCase() || '';
-  if (filename.endsWith('.png')) return 'image/png';
-  if (filename.endsWith('.webp')) return 'image/webp';
-  if (filename.endsWith('.gif')) return 'image/gif';
-  return 'image/jpeg';
-}
-
-async function attachmentToDataUrl(attachment) {
-  if (!isAllowedImage(attachment)) {
-    throw new Error('PNG, JPG, WEBP, GIF 이미지 파일만 사용할 수 있습니다.');
-  }
-
-  if (attachment.size > config.maxImageBytes) {
-    const maxMb = Math.round(config.maxImageBytes / 1024 / 1024);
-    throw new Error(`이미지는 ${maxMb}MB 이하로 올려 주세요.`);
-  }
-
-  const response = await fetch(attachment.url);
-  if (!response.ok) {
-    throw new Error('첨부 이미지를 다운로드하지 못했습니다.');
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  if (arrayBuffer.byteLength > config.maxImageBytes) {
-    const maxMb = Math.round(config.maxImageBytes / 1024 / 1024);
-    throw new Error(`이미지는 ${maxMb}MB 이하로 올려 주세요.`);
-  }
-
-  const base64 = Buffer.from(arrayBuffer).toString('base64');
-  return `data:${getMimeType(attachment)};base64,${base64}`;
-}
 
 async function fetchMember(interaction) {
   return interaction.guild.members.fetch(interaction.user.id);
@@ -106,17 +56,17 @@ async function fetchMember(interaction) {
 
 function buildVerifyPanelPayload() {
   const embed = new EmbedBuilder()
-    .setTitle('인증')
+    .setTitle('수동 인증 티켓')
     .setDescription([
-      `주민등록증 또는 고등학생 학생증과 "${config.requiredPhrase}" 문구 종이를 준비해 주세요.`,
-      '아래 버튼을 눌러 인증 사진 제출 방법을 확인하세요.'
+      '아래 버튼을 누르면 본인과 관리자 역할만 볼 수 있는 인증 티켓이 생성됩니다.',
+      '티켓 안에서 신분증 또는 학생증 사진을 올리면 관리자가 수동으로 확인합니다.'
     ].join('\n'))
     .setColor(0x57f287);
 
   const verifyRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(customIds.verifyGuide)
-      .setLabel('인증 시작')
+      .setLabel('인증 티켓 생성')
       .setStyle(ButtonStyle.Primary)
   );
 
@@ -124,6 +74,21 @@ function buildVerifyPanelPayload() {
     embeds: [embed],
     components: [verifyRow]
   };
+}
+
+function buildTicketControls() {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(customIds.ticketApprove)
+        .setLabel('인증 승인')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(customIds.ticketClose)
+        .setLabel('티켓 닫기')
+        .setStyle(ButtonStyle.Danger)
+    )
+  ];
 }
 
 function buildReligionPanelPayload() {
@@ -159,6 +124,29 @@ function buildReligionPanelPayload() {
   };
 }
 
+function buildMbtiPanelPayload() {
+  const embed = new EmbedBuilder()
+    .setTitle('MBTI 역할 선택')
+    .setDescription('각 축에서 하나씩 선택하세요. 버튼을 누르면 반대 역할은 자동으로 제거됩니다.')
+    .setColor(0xfee75c);
+
+  const components = mbtiAxes.map((axis) =>
+    new ActionRowBuilder().addComponents(
+      ...axis.map((letter) =>
+        new ButtonBuilder()
+          .setCustomId(`${customIds.mbtiPrefix}${letter}`)
+          .setLabel(letter)
+          .setStyle(ButtonStyle.Secondary)
+      )
+    )
+  );
+
+  return {
+    embeds: [embed],
+    components
+  };
+}
+
 function buildCustomReligionModal() {
   const input = new TextInputBuilder()
     .setCustomId(customIds.religionCustomInput)
@@ -179,14 +167,83 @@ function getConfiguredLogChannelId(guildSettings) {
   return guildSettings.logChannelId || config.logChannelId;
 }
 
+function getConfiguredAdminRoleId(guildSettings) {
+  return guildSettings.adminRoleId || config.adminRoleId;
+}
+
 function formatConfiguredSettings(guildSettings) {
   const verifiedRoleId = guildSettings.verifiedRoleId || config.verifiedRoleId;
+  const adminRoleId = getConfiguredAdminRoleId(guildSettings);
   const logChannelId = getConfiguredLogChannelId(guildSettings);
 
   return [
     `인증 역할: ${verifiedRoleId ? `<@&${verifiedRoleId}>` : `"${config.verifiedRoleName}" 자동 생성/사용`}`,
-    `로그 채널: ${logChannelId ? `<#${logChannelId}>` : '설정 안 됨'}`
+    `관리자 역할: ${adminRoleId ? `<@&${adminRoleId}>` : '설정 안 됨'}`,
+    `로그 채널: ${logChannelId ? `<#${logChannelId}>` : '설정 안 됨'}`,
+    `MBTI 채널: ${guildSettings.mbtiChannelId ? `<#${guildSettings.mbtiChannelId}>` : '설정 안 됨'}`
   ].join('\n');
+}
+
+function replaceWelcomeTokens(value, member) {
+  const replacements = {
+    '{user}': member.user.username,
+    '{tag}': member.user.tag,
+    '{mention}': `${member}`,
+    '{server}': member.guild.name,
+    '{memberCount}': String(member.guild.memberCount || '')
+  };
+
+  return Object.entries(replacements).reduce(
+    (result, [token, replacement]) => result.replaceAll(token, replacement),
+    value || ''
+  );
+}
+
+function parseEmbedColor(value) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(value || '')) return 0x57f287;
+  return Number.parseInt(value.slice(1), 16);
+}
+
+async function sendWelcomeMessage(member) {
+  const guildSettings = await getGuildSettings(member.guild.id);
+  const welcome = guildSettings.welcome;
+
+  if (!welcome?.enabled || !welcome.channelId) return;
+
+  const channel = await member.guild.channels.fetch(welcome.channelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) return;
+
+  const title = replaceWelcomeTokens(welcome.embedTitle || '{user} 님 환영합니다', member);
+  const description = [
+    replaceWelcomeTokens(welcome.message || '{mention} 님, {server}에 오신 것을 환영합니다!', member),
+    welcome.emojiText || ''
+  ].filter(Boolean).join('\n');
+  const content = welcome.mentionUser ? `${member}` : '';
+  const allowedMentions = welcome.mentionUser ? { users: [member.id], roles: [] } : { users: [], roles: [] };
+
+  if (welcome.useEmbed === false) {
+    await channel.send({
+      content: [content, description].filter(Boolean).join('\n'),
+      allowedMentions
+    });
+    return;
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(title || '환영합니다')
+    .setDescription(description || `${member} 님 환영합니다!`)
+    .setColor(parseEmbedColor(welcome.embedColor))
+    .setTimestamp();
+
+  if (welcome.showProfileImage !== false) {
+    embed.setThumbnail(member.user.displayAvatarURL({ extension: 'png', size: 256 }));
+  }
+
+  await channel.send({
+    content,
+    embeds: [embed],
+    allowedMentions
+  });
 }
 
 async function sendVerificationLog(interaction, approved, result, roleName, guildSettings) {
@@ -210,17 +267,41 @@ async function sendVerificationLog(interaction, approved, result, roleName, guil
   });
 }
 
-function formatApprovalFailure(result) {
-  return [
-    '인증 조건을 통과하지 못했습니다.',
-    `사유: ${result.reason || '필수 요소를 확인하지 못했습니다.'}`,
-    '',
-    `주민등록증은 하이패스 대상이고, 학생증은 고등학생 학생증만 통과합니다.`,
-    `사진 안에 대상 신분증과 "${config.requiredPhrase}" 문구가 적힌 종이가 함께 보이도록 다시 촬영해 주세요.`
-  ].join('\n');
+function sanitizeTicketChannelName(user) {
+  const safeName = user.username
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}-]/gu, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40);
+
+  return `인증-${safeName || user.id}`;
 }
 
-async function handleVerify(interaction) {
+async function findOpenVerificationTicket(guild, userId) {
+  await guild.channels.fetch();
+  return guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildText &&
+      channel.topic?.includes(`verification-ticket:${userId}:open`)
+  ) || null;
+}
+
+function parseTicketOwnerId(channel) {
+  const match = channel.topic?.match(/verification-ticket:(\d+):open/);
+  return match?.[1] || null;
+}
+
+async function isVerificationAdmin(interaction, guildSettings) {
+  const adminRoleId = getConfiguredAdminRoleId(guildSettings);
+  if (!adminRoleId) return false;
+
+  const member = await fetchMember(interaction);
+  return member.roles.cache.has(adminRoleId) || interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+}
+
+async function createVerificationTicket(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
     return;
@@ -229,27 +310,155 @@ async function handleVerify(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   const guildSettings = await getGuildSettings(interaction.guildId);
-  const attachment = interaction.options.getAttachment('사진', true);
-  const dataUrl = await attachmentToDataUrl(attachment);
-  const result = await analyzeVerificationImage(openai, {
-    dataUrl,
-    model: config.openaiVisionModel,
-    requiredPhrase: config.requiredPhrase
-  });
-  const approved = isVerificationApproved(result, config.verificationMinConfidence);
+  const adminRoleId = getConfiguredAdminRoleId(guildSettings);
 
-  if (!approved) {
-    await sendVerificationLog(interaction, false, result, null, guildSettings);
-    await interaction.editReply(formatApprovalFailure(result));
+  if (!adminRoleId) {
+    await interaction.editReply('먼저 `/설정 관리자역할:<역할>`로 인증 티켓을 볼 관리자 역할을 설정해 주세요.');
     return;
   }
 
-  const member = await fetchMember(interaction);
-  const role = await getOrCreateVerifiedRole(interaction.guild, guildSettings);
+  const adminRole = await interaction.guild.roles.fetch(adminRoleId);
+  if (!adminRole) {
+    await interaction.editReply('설정된 관리자 역할을 찾을 수 없습니다. `/설정 관리자역할:<역할>`로 다시 설정해 주세요.');
+    return;
+  }
 
-  await member.roles.add(role, `OpenAI 인증 통과: ${member.user.tag}`);
-  await sendVerificationLog(interaction, true, result, role.name, guildSettings);
-  await interaction.editReply(`${getVerificationApprovalLabel(result)}으로 인증이 완료되어 "${role.name}" 역할을 지급했습니다.`);
+  const existingTicket = await findOpenVerificationTicket(interaction.guild, interaction.user.id);
+  if (existingTicket) {
+    await interaction.editReply(`이미 열린 인증 티켓이 있습니다: ${existingTicket}`);
+    return;
+  }
+
+  if (!interaction.guild.members.me.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
+    throw new Error('봇에 Manage Channels 권한이 없어 인증 티켓을 만들 수 없습니다.');
+  }
+
+  const parent = interaction.channel?.parentId || null;
+  const channel = await interaction.guild.channels.create({
+    name: sanitizeTicketChannelName(interaction.user),
+    type: ChannelType.GuildText,
+    ...(parent ? { parent } : {}),
+    topic: `verification-ticket:${interaction.user.id}:open`,
+    permissionOverwrites: [
+      {
+        id: interaction.guild.roles.everyone.id,
+        deny: [PermissionsBitField.Flags.ViewChannel]
+      },
+      {
+        id: interaction.user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AttachFiles
+        ]
+      },
+      {
+        id: adminRole.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AttachFiles,
+          PermissionsBitField.Flags.ManageMessages
+        ]
+      },
+      {
+        id: client.user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.ManageChannels,
+          PermissionsBitField.Flags.ManageMessages
+        ]
+      }
+    ],
+    reason: `인증 티켓 생성: ${interaction.user.tag}`
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle('인증 티켓')
+    .setDescription([
+      `${interaction.user} 님, 이 채널에 신분증 또는 학생증 사진을 올려 주세요.`,
+      '관리자가 수동으로 확인한 뒤 인증 승인 버튼을 누르면 인증 역할이 지급됩니다.',
+      '인증이 끝났거나 취소하려면 티켓 닫기 버튼을 누르세요.'
+    ].join('\n'))
+    .setColor(0x57f287);
+
+  await channel.send({
+    content: `${interaction.user} <@&${adminRole.id}>`,
+    embeds: [embed],
+    components: buildTicketControls(),
+    allowedMentions: { users: [interaction.user.id], roles: [adminRole.id] }
+  });
+
+  await interaction.editReply(`인증 티켓을 만들었습니다: ${channel}`);
+}
+
+async function handleVerify(interaction) {
+  await createVerificationTicket(interaction);
+}
+
+async function handleTicketApprove(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const ownerId = parseTicketOwnerId(interaction.channel);
+  if (!ownerId) {
+    await interaction.editReply('이 채널은 열린 인증 티켓이 아닙니다.');
+    return;
+  }
+
+  const guildSettings = await getGuildSettings(interaction.guildId);
+  if (!(await isVerificationAdmin(interaction, guildSettings))) {
+    await interaction.editReply('인증 승인은 설정된 관리자 역할만 사용할 수 있습니다.');
+    return;
+  }
+
+  const targetMember = await interaction.guild.members.fetch(ownerId);
+  const verifiedRole = await getOrCreateVerifiedRole(interaction.guild, guildSettings);
+
+  await targetMember.roles.add(verifiedRole, `수동 인증 승인: ${interaction.user.tag}`);
+  await interaction.channel.send(`${targetMember} 님에게 "${verifiedRole.name}" 역할을 지급했습니다.`);
+  await interaction.editReply('인증을 승인했습니다.');
+}
+
+async function handleTicketClose(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const ownerId = parseTicketOwnerId(interaction.channel);
+  if (!ownerId) {
+    await interaction.editReply('이 채널은 열린 인증 티켓이 아닙니다.');
+    return;
+  }
+
+  const guildSettings = await getGuildSettings(interaction.guildId);
+  const isAdmin = await isVerificationAdmin(interaction, guildSettings);
+  const isOwner = interaction.user.id === ownerId;
+
+  if (!isAdmin && !isOwner) {
+    await interaction.editReply('이 티켓은 생성자 또는 관리자만 닫을 수 있습니다.');
+    return;
+  }
+
+  await interaction.editReply('티켓을 닫습니다. 잠시 후 채널이 삭제됩니다.');
+  await interaction.channel.send(`티켓이 ${interaction.user} 님에 의해 종료됩니다.`);
+
+  setTimeout(() => {
+    interaction.channel.delete(`인증 티켓 종료: ${interaction.user.tag}`).catch((error) => {
+      console.error(`티켓 삭제 실패: ${error.message}`);
+    });
+  }, 2500);
 }
 
 async function handleReligion(interaction) {
@@ -391,22 +600,83 @@ async function handleReligionPanel(interaction) {
 }
 
 async function handleVerifyGuide(interaction) {
+  await createVerificationTicket(interaction);
+}
+
+function formatMbtiStatus(member) {
+  const selected = mbtiAxes.map((axis) => {
+    const selectedLetter = axis.find((letter) => member.roles.cache.some((role) => role.name === `${config.mbtiRolePrefix}${letter}`));
+    return selectedLetter || '-';
+  });
+
+  return selected.join('');
+}
+
+async function applyMbtiRole(interaction, letter) {
+  const axis = getMbtiAxis(letter);
+  if (!axis) {
+    throw new Error('올바른 MBTI 버튼이 아닙니다.');
+  }
+
+  const member = await fetchMember(interaction);
+  const role = await getOrCreateMbtiRole(interaction.guild, letter);
+
+  await replaceMbtiAxisRole(member, role, letter);
+  const updatedMember = await interaction.guild.members.fetch(interaction.user.id);
+
+  return {
+    role,
+    status: formatMbtiStatus(updatedMember)
+  };
+}
+
+async function handleMbtiButton(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
     return;
   }
 
-  await interaction.reply({
-    content: [
-      '인증 사진 제출은 개인정보 보호를 위해 슬래시 명령어 첨부 방식으로 진행합니다.',
-      `1. 주민등록증 또는 고등학생 학생증과 "${config.requiredPhrase}" 문구가 적힌 종이를 함께 촬영해 주세요.`,
-      '2. `/인증` 명령어를 선택하고 `사진` 옵션에 이미지를 첨부해 주세요.',
-      '3. 통과하면 설정된 인증 역할이 자동으로 지급됩니다.',
-      '',
-      '사진 파일은 봇이 저장하지 않고 분석에만 사용합니다.'
-    ].join('\n'),
-    ephemeral: true
-  });
+  await interaction.deferReply({ ephemeral: true });
+
+  const letter = interaction.customId.slice(customIds.mbtiPrefix.length).toUpperCase();
+  const result = await applyMbtiRole(interaction, letter);
+
+  await interaction.editReply(`"${result.role.name}" 역할을 지급했습니다. 현재 선택: ${result.status}`);
+}
+
+async function handleMbtiCommand(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+  if (!hasPermission) {
+    await interaction.reply({ content: 'MBTI 패널 설정은 서버 관리 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand !== '설정') {
+    await interaction.editReply('지원하지 않는 MBTI 명령입니다.');
+    return;
+  }
+
+  const channel = interaction.options.getChannel('채널', true);
+  if (!channel.isTextBased()) {
+    throw new Error('MBTI 패널을 보낼 텍스트 채널을 선택해 주세요.');
+  }
+
+  const permissions = channel.permissionsFor(interaction.guild.members.me);
+  if (!permissions?.has(PermissionsBitField.Flags.ViewChannel) || !permissions.has(PermissionsBitField.Flags.SendMessages)) {
+    throw new Error(`봇이 ${channel} 채널에 메시지를 보낼 권한이 없습니다.`);
+  }
+
+  const guildSettings = await updateGuildSettings(interaction.guildId, { mbtiChannelId: channel.id });
+  await channel.send(buildMbtiPanelPayload());
+  await interaction.editReply(`MBTI 패널을 ${channel} 채널에 보냈습니다.\n${formatConfiguredSettings(guildSettings)}`);
 }
 
 async function handlePing(interaction) {
@@ -431,9 +701,10 @@ async function handleSettings(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   const role = interaction.options.getRole('인증역할');
+  const adminRole = interaction.options.getRole('관리자역할');
   const channel = interaction.options.getChannel('로그채널');
 
-  if (!role && !channel) {
+  if (!role && !adminRole && !channel) {
     const guildSettings = await getGuildSettings(interaction.guildId);
     await interaction.editReply(`현재 설정입니다.\n${formatConfiguredSettings(guildSettings)}`);
     return;
@@ -445,6 +716,14 @@ async function handleSettings(interaction) {
     assertCanManageRoles(interaction.guild);
     assertRoleAssignable(interaction.guild, role);
     changes.verifiedRoleId = role.id;
+  }
+
+  if (adminRole) {
+    if (adminRole.id === interaction.guild.roles.everyone.id) {
+      throw new Error('@everyone은 인증 티켓 관리자 역할로 사용할 수 없습니다.');
+    }
+
+    changes.adminRoleId = adminRole.id;
   }
 
   if (channel) {
@@ -483,8 +762,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      if (interaction.customId === customIds.ticketApprove) {
+        await handleTicketApprove(interaction);
+        return;
+      }
+
+      if (interaction.customId === customIds.ticketClose) {
+        await handleTicketClose(interaction);
+        return;
+      }
+
       if (interaction.customId === customIds.religionCustomButton) {
         await interaction.showModal(buildCustomReligionModal());
+        return;
+      }
+
+      if (interaction.customId.startsWith(customIds.mbtiPrefix)) {
+        await handleMbtiButton(interaction);
         return;
       }
     }
@@ -531,6 +825,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.mbti) {
+      await handleMbtiCommand(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.ping) {
       await handlePing(interaction);
       return;
@@ -549,6 +848,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     } else if (interaction.isRepliable()) {
       await interaction.reply({ content: `오류: ${message}`, ephemeral: true }).catch(() => null);
     }
+  }
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    await sendWelcomeMessage(member);
+  } catch (error) {
+    console.error(`환영 메시지 전송 실패 (${member.guild.id}/${member.id}): ${error.message}`);
   }
 });
 

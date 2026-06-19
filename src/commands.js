@@ -9,6 +9,7 @@ export const commandNames = {
   panel: '패널',
   verifyPanel: '인증패널',
   religionPanel: '종교패널',
+  mbti: 'mbti',
   ping: '핑'
 };
 
@@ -36,12 +37,18 @@ export function buildCommands() {
     buildUpdateCommand(),
     new SlashCommandBuilder()
       .setName(commandNames.settings)
-      .setDescription('인증 역할과 인증 로그 채널을 설정합니다.')
+      .setDescription('인증 역할, 관리자 역할, 인증 로그 채널을 설정합니다.')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addRoleOption((option) =>
         option
           .setName('인증역할')
           .setDescription('인증 통과 시 지급할 역할')
+          .setRequired(false)
+      )
+      .addRoleOption((option) =>
+        option
+          .setName('관리자역할')
+          .setDescription('인증 티켓을 확인할 관리자 역할')
           .setRequired(false)
       )
       .addChannelOption((option) =>
@@ -85,17 +92,27 @@ export function buildCommands() {
           .addChannelTypes(ChannelType.GuildText)
       ),
     new SlashCommandBuilder()
+      .setName(commandNames.mbti)
+      .setDescription('MBTI 역할 패널을 설정합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('설정')
+          .setDescription('MBTI 토글 패널을 보낼 채널을 지정합니다.')
+          .addChannelOption((option) =>
+            option
+              .setName('채널')
+              .setDescription('MBTI 패널을 보낼 채널')
+              .setRequired(true)
+              .addChannelTypes(ChannelType.GuildText)
+          )
+      ),
+    new SlashCommandBuilder()
       .setName(commandNames.ping)
       .setDescription('봇 응답 상태를 확인합니다.'),
     new SlashCommandBuilder()
       .setName(commandNames.verify)
-      .setDescription('주민등록증 또는 고등학생 학생증과 인증 문구 종이를 제출합니다.')
-      .addAttachmentOption((option) =>
-        option
-          .setName('사진')
-          .setDescription('주민등록증/고등학생 학생증과 인증 문구 종이가 함께 보이는 사진')
-          .setRequired(true)
-      ),
+      .setDescription('수동 인증 티켓을 생성합니다.'),
     new SlashCommandBuilder()
       .setName(commandNames.religion)
       .setDescription('자신의 종교 역할을 선택하거나 직접 입력합니다.')

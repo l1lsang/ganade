@@ -41,13 +41,16 @@ export const config = {
   openaiVisionModel: process.env.OPENAI_VISION_MODEL || 'gpt-5.5',
   verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
   verifiedRoleName: process.env.VERIFIED_ROLE_NAME || '인증됨',
+  adminRoleId: process.env.ADMIN_ROLE_ID || null,
   requiredPhrase: process.env.REQUIRED_PHRASE || '돌아갈래',
   verificationMinConfidence: readNumber(process.env.VERIFICATION_MIN_CONFIDENCE, 0.72),
   religionRolePrefix: process.env.RELIGION_ROLE_PREFIX || '종교 | ',
   religionChoices: readList(process.env.RELIGION_CHOICES, defaultReligions).slice(0, 25),
+  mbtiRolePrefix: process.env.MBTI_ROLE_PREFIX || 'MBTI | ',
   maxImageBytes: Math.round(readNumber(process.env.MAX_IMAGE_MB, 8) * 1024 * 1024),
   autoRegisterUpdateCommand: readBoolean(process.env.AUTO_REGISTER_UPDATE_COMMAND, true),
-  logChannelId: process.env.LOG_CHANNEL_ID || null
+  logChannelId: process.env.LOG_CHANNEL_ID || null,
+  webAdminToken: process.env.WEB_ADMIN_TOKEN || null
 };
 
 export function assertRequiredConfig({ forSyncOnly = false } = {}) {
@@ -55,7 +58,6 @@ export function assertRequiredConfig({ forSyncOnly = false } = {}) {
 
   if (!config.discordToken) missing.push('DISCORD_TOKEN');
   if (!config.discordClientId) missing.push('DISCORD_CLIENT_ID');
-  if (!forSyncOnly && !config.openaiApiKey) missing.push('OPENAI_API_KEY');
 
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);

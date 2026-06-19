@@ -1,6 +1,13 @@
 import { PermissionsBitField } from 'discord.js';
 import { config } from './config.js';
 
+export const mbtiAxes = [
+  ['I', 'E'],
+  ['N', 'S'],
+  ['T', 'F'],
+  ['J', 'P']
+];
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -89,6 +96,10 @@ export function getReligionRoleName(religionName) {
   return `${config.religionRolePrefix}${religionName}`;
 }
 
+export function getMbtiRoleName(letter) {
+  return `${config.mbtiRolePrefix}${letter}`;
+}
+
 export async function getOrCreateReligionRole(guild, religionName) {
   await guild.roles.fetch();
 
@@ -130,5 +141,58 @@ export async function replaceReligionRole(member, newRole) {
 
   if (!member.roles.cache.has(newRole.id)) {
     await member.roles.add(newRole, `종교 역할 선택: ${member.user.tag}`);
+  }
+}
+
+export function getMbtiAxis(letter) {
+  const normalized = letter.toUpperCase();
+  return mbtiAxes.find((axis) => axis.includes(normalized)) || null;
+}
+
+export async function getOrCreateMbtiRole(guild, letter) {
+  const normalized = letter.toUpperCase();
+  const axis = getMbtiAxis(normalized);
+
+  if (!axis) {
+    throw new Error('올바른 MBTI 문자가 아닙니다.');
+  }
+
+  await guild.roles.fetch();
+
+  const roleName = getMbtiRoleName(normalized);
+  const existing = findRoleByName(guild, roleName);
+
+  if (existing) {
+    assertRoleAssignable(guild, existing);
+    return existing;
+  }
+
+  assertCanManageRoles(guild);
+  const created = await guild.roles.create({
+    name: roleName,
+    color: 0xfee75c,
+    mentionable: false,
+    permissions: [],
+    reason: `MBTI 역할 자동 생성: ${normalized}`
+  });
+
+  assertRoleAssignable(guild, created);
+  return created;
+}
+
+export async function replaceMbtiAxisRole(member, selectedRole, selectedLetter) {
+  const axis = getMbtiAxis(selectedLetter);
+  const axisRoleNames = axis.map(getMbtiRoleName);
+  const removableRoles = member.roles.cache.filter(
+    (role) => role.id !== selectedRole.id && axisRoleNames.includes(role.name) && !role.managed
+  );
+  const manageableRoles = removableRoles.filter((role) => role.position < member.guild.members.me.roles.highest.position);
+
+  if (manageableRoles.size > 0) {
+    await member.roles.remove([...manageableRoles.values()], `MBTI 역할 변경: ${member.user.tag}`);
+  }
+
+  if (!member.roles.cache.has(selectedRole.id)) {
+    await member.roles.add(selectedRole, `MBTI 역할 선택: ${member.user.tag}`);
   }
 }
