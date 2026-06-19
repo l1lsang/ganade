@@ -247,6 +247,18 @@ export function buildCommands() {
         subcommand
           .setName('상태')
           .setDescription('현재 익명채팅방 설정을 확인합니다.')
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('추적')
+          .setDescription('익명 작성자 코드를 실제 유저와 연결해 확인합니다.')
+          .addStringOption((option) =>
+            option
+              .setName('코드')
+              .setDescription('예: 10.12.34.56 또는 ㅇㅇ(10.12.34.56)')
+              .setRequired(true)
+              .setMaxLength(40)
+          )
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ping)

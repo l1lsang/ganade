@@ -6,7 +6,7 @@
 
 1. Discord Developer Portal에서 봇을 만들고 `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`를 준비합니다.
 2. 서버에 초대할 때 OAuth2 scope는 `bot`, `applications.commands`를 선택합니다.
-3. Bot 권한은 최소 `Manage Roles`, `Manage Channels`, `Manage Messages`, `Ban Members`, `Attach Files`, `Embed Links`, `Create Expressions` 또는 `Manage Expressions`, `Use External Emojis`가 필요합니다.
+3. Bot 권한은 최소 `Manage Roles`, `Manage Channels`, `Manage Messages`, `Manage Webhooks`, `Ban Members`, `Attach Files`, `Embed Links`, `Create Expressions` 또는 `Manage Expressions`, `Use External Emojis`가 필요합니다.
 4. 환영 메시지를 쓰려면 Discord Developer Portal의 Bot 설정에서 `Server Members Intent`를 켭니다.
 5. 익명채팅방을 쓰려면 Discord Developer Portal의 Bot 설정에서 `Message Content Intent`를 켭니다.
 6. 초대자 표시를 쓰려면 봇에 `Manage Server` 권한이 있어야 초대 목록을 읽을 수 있습니다.
@@ -104,6 +104,7 @@ Render 또는 로컬에서 열리는 웹사이트 `/`에서 환영 메시지를 
 - `/익명채팅 설정 채널:<채널>`: 해당 채널을 익명채팅방으로 설정
 - `/익명채팅 해제`: 익명채팅방 설정 해제
 - `/익명채팅 상태`: 현재 익명채팅방 확인
+- `/익명채팅 추적 코드:<코드>`: `ㅇㅇ(가상IP)` 작성자의 실제 유저 확인
 - `/핑`: 봇 응답 상태 확인
 - `/종교선택 종교:<선택>`: 기존 종교 역할 지급
 - `/종교선택 직접입력:<이름>`: 해당 종교 역할이 없으면 생성 후 지급
@@ -138,9 +139,11 @@ Render 또는 로컬에서 열리는 웹사이트 `/`에서 환영 메시지를 
 
 ## 익명채팅방
 
-`/익명채팅 설정 채널:<채널>`을 실행하면 해당 채널에 사용자가 쓴 일반 메시지를 봇이 익명 임베드로 다시 보내고 원본 메시지를 삭제합니다. 첨부파일은 봇이 다시 업로드하며, 멘션은 울리지 않도록 차단합니다.
+`/익명채팅 설정 채널:<채널>`을 실행하면 해당 채널에 사용자가 쓴 일반 메시지를 웹훅으로 다시 보내고 원본 메시지를 삭제합니다. 채팅에는 작성자가 `ㅇㅇ(10.x.x.x)` 같은 가상 IP 코드로 표시됩니다. 첨부파일은 웹훅이 다시 업로드하며, 멘션은 울리지 않도록 차단합니다.
 
-익명채팅방이 정상 작동하려면 봇에 `View Channel`, `Send Messages`, `Manage Messages`, `Attach Files`, `Embed Links` 권한이 필요합니다. 또한 Discord Developer Portal에서 `Message Content Intent`를 켜야 메시지 내용을 읽을 수 있습니다.
+Discord 봇은 실제 IP 주소를 받을 수 없으므로 `ㅇㅇ(10.x.x.x)` 값은 실제 IP가 아니라 서버 안에서 유저를 구분하기 위한 가상 코드입니다. 관리자는 `/익명채팅 추적 코드:<코드>`로 실제 유저와 최근 익명 메시지 링크를 확인할 수 있습니다. 추적 데이터는 `data/anonymous-chat.json`에 저장되며 `.gitignore`에 의해 Git에는 올라가지 않습니다.
+
+익명채팅방이 정상 작동하려면 봇에 `View Channel`, `Send Messages`, `Manage Messages`, `Manage Webhooks`, `Attach Files`, `Embed Links` 권한이 필요합니다. 또한 Discord Developer Portal에서 `Message Content Intent`를 켜야 메시지 내용을 읽을 수 있습니다.
 
 ## MBTI 역할
 

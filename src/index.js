@@ -19,6 +19,12 @@ import {
   registerAttendance,
   resetGuildAttendance
 } from './attendance.js';
+import {
+  getOrCreateAnonymousIdentity,
+  normalizeAnonymousCode,
+  recordAnonymousMessage,
+  traceAnonymousCode
+} from './anonymous.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
 import { startHealthServer } from './health-server.js';
@@ -73,6 +79,7 @@ const customIds = {
 
 const inviteCache = new Map();
 const customEmojiPattern = /^<(?<animated>a?):(?<name>[A-Za-z0-9_]{2,32}):(?<id>\d{16,22})>$/;
+const anonymousWebhookName = '가나디 익명채팅';
 
 async function fetchMember(interaction) {
   return interaction.guild.members.fetch(interaction.user.id);
@@ -1283,59 +1290,69 @@ function assertAnonymousChannelPermissions(channel) {
     PermissionsBitField.Flags.ViewChannel,
     PermissionsBitField.Flags.SendMessages,
     PermissionsBitField.Flags.ManageMessages,
+    PermissionsBitField.Flags.ManageWebhooks,
     PermissionsBitField.Flags.AttachFiles,
     PermissionsBitField.Flags.EmbedLinks
   ];
   const missingPermissions = requiredPermissions.filter((permission) => !permissions?.has(permission));
 
   if (missingPermissions.length > 0) {
-    throw new Error(`봇이 ${channel} 채널에서 메시지 보기, 메시지 보내기, 메시지 관리, 파일 첨부, 링크 임베드 권한을 모두 가져야 합니다.`);
+    throw new Error(`봇이 ${channel} 채널에서 메시지 보기, 메시지 보내기, 메시지 관리, 웹훅 관리, 파일 첨부, 링크 임베드 권한을 모두 가져야 합니다.`);
   }
 }
 
-function truncateAnonymousText(value, maxLength = 3900) {
+function truncateAnonymousText(value, maxLength = 1800) {
   const text = String(value || '').trim();
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength - 20)}\n...내용이 길어 잘렸습니다.`;
 }
 
-function buildAnonymousRelayPayload(message) {
+async function getAnonymousWebhook(channel) {
+  const webhooks = await channel.fetchWebhooks();
+  const existingWebhook = webhooks.find(
+    (webhook) => webhook.name === anonymousWebhookName && webhook.owner?.id === client.user.id
+  );
+
+  if (existingWebhook) return existingWebhook;
+
+  return channel.createWebhook({
+    name: anonymousWebhookName,
+    reason: '익명채팅방 메시지 전송용 웹훅 생성'
+  });
+}
+
+function buildAnonymousRelayPayload(message, identity) {
   const content = truncateAnonymousText(message.content);
   const stickerNames = [...message.stickers.values()].map((sticker) => sticker.name);
-  const descriptionParts = [];
+  const contentParts = [];
 
   if (content) {
-    descriptionParts.push(content);
+    contentParts.push(content);
   }
 
   if (stickerNames.length > 0) {
-    descriptionParts.push(`스티커: ${stickerNames.join(', ')}`);
+    contentParts.push(`스티커: ${stickerNames.join(', ')}`);
   }
 
-  if (descriptionParts.length === 0 && message.attachments.size > 0) {
-    descriptionParts.push('첨부파일을 보냈습니다.');
+  if (contentParts.length === 0 && message.attachments.size > 0) {
+    contentParts.push('첨부파일');
   }
 
-  const embed = new EmbedBuilder()
-    .setAuthor({ name: '익명' })
-    .setDescription(descriptionParts.join('\n\n') || '빈 메시지')
-    .setColor(0x2b2d31)
-    .setFooter({ text: '익명채팅' })
-    .setTimestamp();
   const files = [...message.attachments.values()].slice(0, 10).map((attachment) => ({
     attachment: attachment.url,
     name: attachment.name || 'attachment'
   }));
 
   return {
-    embeds: [embed],
+    username: `ㅇㅇ(${identity.code})`,
+    content: contentParts.join('\n') || '빈 메시지',
     files,
     allowedMentions: { parse: [], users: [], roles: [] }
   };
 }
 
 async function relayAnonymousMessage(message) {
-  if (!message.guild || message.author.bot || message.system) return;
+  if (!message.guild || message.author.bot || message.webhookId || message.system) return;
 
   const guildSettings = await getGuildSettings(message.guild.id);
   if (!guildSettings.anonymousChannelId || message.channelId !== guildSettings.anonymousChannelId) return;
@@ -1344,7 +1361,8 @@ async function relayAnonymousMessage(message) {
   if (
     !permissions?.has(PermissionsBitField.Flags.ViewChannel) ||
     !permissions.has(PermissionsBitField.Flags.SendMessages) ||
-    !permissions.has(PermissionsBitField.Flags.ManageMessages)
+    !permissions.has(PermissionsBitField.Flags.ManageMessages) ||
+    !permissions.has(PermissionsBitField.Flags.ManageWebhooks)
   ) {
     console.warn(`익명채팅 처리 권한 부족 (${message.guild.id}/${message.channelId})`);
     return;
@@ -1353,7 +1371,19 @@ async function relayAnonymousMessage(message) {
   let relayMessage = null;
 
   try {
-    relayMessage = await message.channel.send(buildAnonymousRelayPayload(message));
+    const identity = await getOrCreateAnonymousIdentity(message.guild.id, message.author);
+    const webhook = await getAnonymousWebhook(message.channel);
+
+    relayMessage = await webhook.send(buildAnonymousRelayPayload(message, identity));
+    await recordAnonymousMessage(message.guild.id, {
+      userId: message.author.id,
+      code: identity.code,
+      channelId: message.channelId,
+      originalMessageId: message.id,
+      relayMessageId: relayMessage.id,
+      contentPreview: truncateAnonymousText(message.content, 120),
+      attachmentCount: message.attachments.size
+    });
     await message.delete();
   } catch (error) {
     if (relayMessage?.deletable) {
@@ -1362,6 +1392,59 @@ async function relayAnonymousMessage(message) {
 
     console.error(`익명채팅 메시지 처리 실패 (${message.guild.id}/${message.channelId}/${message.id}): ${error.message}`);
   }
+}
+
+function buildAnonymousTraceEmbed(guildId, traceResult, user) {
+  const { code, identity, messages } = traceResult;
+  const recentMessages = messages.slice(-5).reverse();
+  const recentLines = recentMessages.map((message, index) => {
+    const link = `https://discord.com/channels/${guildId}/${message.channelId}/${message.relayMessageId}`;
+    const preview = message.contentPreview ? ` - ${message.contentPreview}` : '';
+
+    return `${index + 1}. [메시지 보기](${link})${preview}`;
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle('익명 작성자 추적')
+    .setColor(0x5865f2)
+    .addFields(
+      {
+        name: '익명 코드',
+        value: code,
+        inline: true
+      },
+      {
+        name: '실제 유저',
+        value: identity
+          ? `${user ? `${user}` : `<@${identity.userId}>`} (${identity.userId})`
+          : '찾을 수 없음',
+        inline: false
+      }
+    )
+    .setTimestamp();
+
+  if (identity) {
+    embed.addFields(
+      {
+        name: '저장된 태그',
+        value: identity.tag || identity.username || '알 수 없음',
+        inline: true
+      },
+      {
+        name: '저장된 메시지 수',
+        value: `${messages.length}개`,
+        inline: true
+      }
+    );
+  }
+
+  embed.addFields({
+    name: '최근 메시지',
+    value: recentLines.length > 0 ? recentLines.join('\n') : '저장된 메시지가 없습니다.',
+    inline: false
+  });
+
+  return embed;
 }
 
 async function handleAnonymousCommand(interaction) {
@@ -1393,6 +1476,23 @@ async function handleAnonymousCommand(interaction) {
   if (subcommand === '상태') {
     const guildSettings = await getGuildSettings(interaction.guildId);
     await interaction.editReply(`현재 익명채팅방: ${guildSettings.anonymousChannelId ? `<#${guildSettings.anonymousChannelId}>` : '설정 안 됨'}`);
+    return;
+  }
+
+  if (subcommand === '추적') {
+    const rawCode = interaction.options.getString('코드', true);
+    const traceResult = await traceAnonymousCode(interaction.guildId, rawCode);
+
+    if (!traceResult.identity) {
+      await interaction.editReply(`익명 코드 \`${normalizeAnonymousCode(rawCode)}\`에 연결된 유저를 찾을 수 없습니다.`);
+      return;
+    }
+
+    const user = await client.users.fetch(traceResult.identity.userId).catch(() => null);
+    await interaction.editReply({
+      embeds: [buildAnonymousTraceEmbed(interaction.guildId, traceResult, user)],
+      allowedMentions: { users: [], roles: [] }
+    });
     return;
   }
 
