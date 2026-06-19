@@ -16,6 +16,7 @@ export const commandNames = {
   anonymous: '익명채팅',
   anonymousMessage: '익명',
   selfIntroduction: '자기소개',
+  bibleMessage: '성경말씀',
   level: '레벨',
   levelRanking: '랭킹',
   clean: '청소',
@@ -291,6 +292,32 @@ export function buildCommands() {
           .setDescription('자기소개 예시 임베드를 표시할 채널')
           .setRequired(true)
           .addChannelTypes(ChannelType.GuildText)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.bibleMessage)
+      .setDescription('가나디의 세 번 안부와 하루 한 번 말씀 채널을 설정합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('설정')
+          .setDescription('@everyone 가나디 안부를 보낼 채널을 설정합니다.')
+          .addChannelOption((option) =>
+            option
+              .setName('채널')
+              .setDescription('예약 안부와 하루 말씀을 보낼 채널')
+              .setRequired(true)
+              .addChannelTypes(ChannelType.GuildText)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('해제')
+          .setDescription('예약 가나디 안부 전송을 중단합니다.')
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('상태')
+          .setDescription('현재 안부 채널과 한국 시간 예약을 확인합니다.')
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)

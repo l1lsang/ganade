@@ -14,6 +14,7 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from 'discord.js';
+import OpenAI from 'openai';
 import {
   getAttendanceRanking,
   registerAttendance,
@@ -25,8 +26,14 @@ import {
   recordAnonymousMessage,
   traceAnonymousCode
 } from './anonymous.js';
+import {
+  configureBibleMessage,
+  normalizeBibleSchedule,
+  startBibleScheduler
+} from './bible-scheduler.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
+import { generateGanadiReply, shouldRespondToGanadi } from './ganadi-chat.js';
 import { startHealthServer } from './health-server.js';
 import {
   checkpointVoiceSessions,
@@ -67,6 +74,14 @@ import {
 
 assertRequiredConfig();
 
+const openai = config.openaiApiKey
+  ? new OpenAI({
+      apiKey: config.openaiApiKey,
+      timeout: 30_000,
+      maxRetries: 2
+    })
+  : null;
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -93,11 +108,90 @@ const customIds = {
 };
 
 const inviteCache = new Map();
+const ganadiCooldowns = new Map();
+const ganadiResponseQueues = new Map();
 const customEmojiPattern = /^<(?<animated>a?):(?<name>[A-Za-z0-9_]{2,32}):(?<id>\d{16,22})>$/;
 const anonymousWebhookName = '가나디 익명채팅';
 
 async function fetchMember(interaction) {
   return interaction.guild.members.fetch(interaction.user.id);
+}
+
+function isGanadiChatTrigger(message) {
+  const mentioned = Boolean(client.user?.id && message.mentions.users.has(client.user.id));
+  return shouldRespondToGanadi(message.content, mentioned);
+}
+
+function startGanadiCooldown(message) {
+  if (config.ganadiChatCooldownMs <= 0) return true;
+
+  const cooldownKey = `${message.guildId}:${message.author.id}`;
+  const now = Date.now();
+  const cooldownEndsAt = ganadiCooldowns.get(cooldownKey) || 0;
+
+  if (cooldownEndsAt > now) return false;
+
+  const nextCooldownEndsAt = now + config.ganadiChatCooldownMs;
+  ganadiCooldowns.set(cooldownKey, nextCooldownEndsAt);
+
+  const timer = setTimeout(() => {
+    if (ganadiCooldowns.get(cooldownKey) === nextCooldownEndsAt) {
+      ganadiCooldowns.delete(cooldownKey);
+    }
+  }, config.ganadiChatCooldownMs);
+  timer.unref();
+
+  return true;
+}
+
+async function replyAsGanadi(message) {
+  if (!config.ganadiChatEnabled || !isGanadiChatTrigger(message)) return false;
+
+  if (!openai) {
+    console.warn('가나디 채팅이 호출되었지만 OPENAI_API_KEY가 설정되지 않았습니다.');
+    return false;
+  }
+
+  if (!startGanadiCooldown(message)) return false;
+
+  await message.channel.sendTyping().catch(() => null);
+  const reply = await generateGanadiReply(openai, {
+    content: message.content,
+    model: config.openaiChatModel,
+    maxInputCharacters: config.ganadiChatMaxInputCharacters
+  });
+
+  await message.reply({
+    content: reply,
+    allowedMentions: {
+      parse: [],
+      repliedUser: false
+    }
+  });
+
+  return true;
+}
+
+function enqueueGanadiReply(message) {
+  if (!config.ganadiChatEnabled || !isGanadiChatTrigger(message)) {
+    return Promise.resolve(false);
+  }
+
+  const queueKey = `${message.guildId}:${message.channelId}`;
+  const previousQueue = ganadiResponseQueues.get(queueKey) || Promise.resolve();
+  const nextQueue = previousQueue
+    .catch(() => null)
+    .then(() => replyAsGanadi(message));
+
+  ganadiResponseQueues.set(queueKey, nextQueue);
+  const cleanQueue = () => {
+    if (ganadiResponseQueues.get(queueKey) === nextQueue) {
+      ganadiResponseQueues.delete(queueKey);
+    }
+  };
+  nextQueue.then(cleanQueue, cleanQueue);
+
+  return nextQueue;
 }
 
 function isAllowedEmojiAttachment(attachment) {
@@ -1888,6 +1982,60 @@ async function handleSelfIntroduction(interaction) {
   );
 }
 
+async function handleBibleMessage(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild)) {
+    await interaction.reply({ content: '가나디 예약 안부 설정은 서버 관리 권한이 필요합니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  const subcommand = interaction.options.getSubcommand();
+  const schedule = normalizeBibleSchedule(config.bibleSchedule);
+  const scheduleText = `아침 ${schedule.morning} · 점심 ${schedule.lunch} · 저녁 ${schedule.evening} (한국 시간)`;
+
+  if (subcommand === '설정') {
+    const channel = interaction.options.getChannel('채널', true);
+    await configureBibleMessage(interaction.guild, {
+      enabled: true,
+      channelId: channel.id
+    });
+    await interaction.editReply({
+      content: `${channel} 채널에 가나디의 예약 안부를 보냅니다.\n${scheduleText}\n매번 @everyone을 호출하고, 하루 첫 안부에만 성경 말씀을 포함합니다.`,
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
+
+  if (subcommand === '해제') {
+    await configureBibleMessage(interaction.guild, { enabled: false });
+    await interaction.editReply('가나디의 예약 안부와 성경 말씀 전송을 중단했습니다.');
+    return;
+  }
+
+  if (subcommand === '상태') {
+    const guildSettings = await getGuildSettings(interaction.guildId);
+    const bibleSettings = guildSettings.bibleMessage;
+    await interaction.editReply({
+      content: [
+        `사용 여부: ${bibleSettings?.enabled ? '사용 중' : '사용 안 함'}`,
+        `전송 채널: ${bibleSettings?.channelId ? `<#${bibleSettings.channelId}>` : '설정 안 됨'}`,
+        `예약 시간: ${scheduleText}`,
+        '호출 대상: @everyone',
+        '성경 말씀: 하루 첫 안부에만 1회'
+      ].join('\n'),
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
+
+  await interaction.editReply('지원하지 않는 성경 말씀 명령입니다.');
+}
+
 function serializeInvite(invite) {
   return {
     code: invite.code,
@@ -1962,6 +2110,17 @@ client.once(Events.ClientReady, async (readyClient) => {
     }
   }
 
+  const bibleSchedule = normalizeBibleSchedule(config.bibleSchedule);
+  startBibleScheduler(readyClient, openai, {
+    model: config.openaiChatModel,
+    schedule: bibleSchedule,
+    graceMinutes: config.bibleSchedulerGraceMinutes,
+    intervalMs: config.bibleSchedulerIntervalMs
+  });
+  console.log(
+    `가나디 안부 스케줄러 시작 (KST 아침 ${bibleSchedule.morning}, 점심 ${bibleSchedule.lunch}, 저녁 ${bibleSchedule.evening}, 말씀 1일 1회)`
+  );
+
   if (!config.autoRegisterUpdateCommand) return;
 
   try {
@@ -1985,6 +2144,16 @@ client.on(Events.MessageCreate, async (message) => {
     );
   } catch (error) {
     console.error(`채팅 레벨 기록 실패 (${message.guildId}/${message.author.id}): ${error.message}`);
+  }
+
+  try {
+    await enqueueGanadiReply(message);
+  } catch (error) {
+    console.error(`가나디 캐릭터 응답 실패 (${message.guildId}/${message.channelId}): ${error.message}`);
+    await message.reply({
+      content: '듀… 지금 생각이 살짝 꼬였어. 조금 뒤에 다시 불러줘!',
+      allowedMentions: { parse: [], repliedUser: false }
+    }).catch(() => null);
   }
 
   try {
@@ -2129,6 +2298,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.selfIntroduction) {
       await handleSelfIntroduction(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.bibleMessage) {
+      await handleBibleMessage(interaction);
       return;
     }
 

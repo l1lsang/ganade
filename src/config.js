@@ -39,6 +39,26 @@ export const config = {
   discordGuildId: process.env.DISCORD_GUILD_ID || null,
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiVisionModel: process.env.OPENAI_VISION_MODEL || 'gpt-5.5',
+  openaiChatModel: process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini',
+  ganadiChatEnabled: readBoolean(process.env.GANADI_CHAT_ENABLED, true),
+  ganadiChatCooldownMs: Math.max(0, readNumber(process.env.GANADI_CHAT_COOLDOWN_SECONDS, 5) * 1000),
+  ganadiChatMaxInputCharacters: Math.max(
+    100,
+    Math.min(4000, Math.floor(readNumber(process.env.GANADI_CHAT_MAX_INPUT_CHARS, 1200)))
+  ),
+  bibleSchedule: {
+    morning: process.env.BIBLE_MORNING_TIME || '08:00',
+    lunch: process.env.BIBLE_LUNCH_TIME || '12:00',
+    evening: process.env.BIBLE_EVENING_TIME || '19:00'
+  },
+  bibleSchedulerGraceMinutes: Math.max(
+    0,
+    Math.min(60, Math.floor(readNumber(process.env.BIBLE_SCHEDULER_GRACE_MINUTES, 20)))
+  ),
+  bibleSchedulerIntervalMs: Math.max(
+    10,
+    Math.min(300, readNumber(process.env.BIBLE_SCHEDULER_INTERVAL_SECONDS, 30))
+  ) * 1000,
   verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
   verifiedRoleName: process.env.VERIFIED_ROLE_NAME || '인증됨',
   adminRoleId: process.env.ADMIN_ROLE_ID || null,
