@@ -10,6 +10,7 @@ export const commandNames = {
   verifyPanel: '인증패널',
   religionPanel: '종교패널',
   mbti: 'mbti',
+  addEmoji: '이모지추가',
   ping: '핑'
 };
 
@@ -106,6 +107,31 @@ export function buildCommands() {
               .setRequired(true)
               .addChannelTypes(ChannelType.GuildText)
           )
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.addEmoji)
+      .setDescription('외부 이모지나 이미지를 서버 이모지로 추가합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuildExpressions)
+      .addStringOption((option) =>
+        option
+          .setName('이모지')
+          .setDescription('외부 이모지 <:name:id>, <a:name:id> 또는 이미지 URL')
+          .setRequired(false)
+          .setMaxLength(300)
+      )
+      .addAttachmentOption((option) =>
+        option
+          .setName('이미지')
+          .setDescription('서버 이모지로 추가할 이미지 파일')
+          .setRequired(false)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('이름')
+          .setDescription('새 이모지 이름, 영문/숫자/밑줄만 가능')
+          .setRequired(false)
+          .setMinLength(2)
+          .setMaxLength(32)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ping)

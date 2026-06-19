@@ -34,7 +34,7 @@ import { ensureUpdateCommand, syncAllCommands } from './sync-commands.js';
 assertRequiredConfig();
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildInvites]
 });
 
 startHealthServer(client);
@@ -50,8 +50,126 @@ const customIds = {
   mbtiPrefix: 'mbti:'
 };
 
+const inviteCache = new Map();
+const customEmojiPattern = /^<(?<animated>a?):(?<name>[A-Za-z0-9_]{2,32}):(?<id>\d{16,22})>$/;
+
 async function fetchMember(interaction) {
   return interaction.guild.members.fetch(interaction.user.id);
+}
+
+function isAllowedEmojiAttachment(attachment) {
+  const contentType = attachment.contentType?.toLowerCase() || '';
+  const filename = attachment.name?.toLowerCase() || '';
+
+  return (
+    contentType.startsWith('image/') ||
+    /\.(png|jpe?g|webp|gif)$/.test(filename)
+  );
+}
+
+function normalizeEmojiName(rawName) {
+  const normalized = String(rawName || '')
+    .normalize('NFKC')
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 32);
+
+  if (normalized.length < 2) {
+    throw new Error('이모지 이름은 영문/숫자/밑줄만 사용해서 2~32자로 입력해 주세요.');
+  }
+
+  return normalized;
+}
+
+function parseEmojiSource(emojiInput, attachment) {
+  if (attachment) {
+    if (!isAllowedEmojiAttachment(attachment)) {
+      throw new Error('이미지 첨부파일만 이모지로 추가할 수 있습니다.');
+    }
+
+    return {
+      attachment: attachment.url,
+      inferredName: attachment.name || 'emoji'
+    };
+  }
+
+  const input = String(emojiInput || '').trim();
+  if (!input) {
+    throw new Error('외부 이모지 문자열, 이미지 URL, 또는 이미지 첨부파일 중 하나를 넣어 주세요.');
+  }
+
+  const emojiMatch = input.match(customEmojiPattern);
+  if (emojiMatch?.groups) {
+    const extension = emojiMatch.groups.animated ? 'gif' : 'png';
+
+    return {
+      attachment: `https://cdn.discordapp.com/emojis/${emojiMatch.groups.id}.${extension}?quality=lossless`,
+      inferredName: emojiMatch.groups.name
+    };
+  }
+
+  let url;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error('이모지 입력값은 `<:name:id>`, `<a:name:id>`, 또는 이미지 URL이어야 합니다.');
+  }
+
+  if (url.protocol !== 'https:') {
+    throw new Error('이미지 URL은 https 주소만 사용할 수 있습니다.');
+  }
+
+  if (!/\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(url.href)) {
+    throw new Error('이미지 URL은 PNG, JPG, WEBP, GIF 파일 주소여야 합니다.');
+  }
+
+  return {
+    attachment: url.href,
+    inferredName: decodeURIComponent(url.pathname.split('/').pop() || 'emoji')
+  };
+}
+
+function assertEmojiPermissions(interaction) {
+  const userCanManage = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuildExpressions);
+  if (!userCanManage) {
+    throw new Error('서버 이모지 추가는 이모지/스티커 관리 권한이 필요합니다.');
+  }
+
+  const botPermissions = interaction.guild.members.me.permissions;
+  const botCanCreate = botPermissions.any(
+    PermissionsBitField.Flags.CreateGuildExpressions | PermissionsBitField.Flags.ManageGuildExpressions
+  );
+
+  if (!botCanCreate) {
+    throw new Error('봇에 Create Expressions 또는 Manage Expressions 권한이 없습니다.');
+  }
+}
+
+async function handleAddEmoji(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  assertEmojiPermissions(interaction);
+
+  const emojiInput = interaction.options.getString('이모지');
+  const attachment = interaction.options.getAttachment('이미지');
+  const requestedName = interaction.options.getString('이름');
+  const source = parseEmojiSource(emojiInput, attachment);
+  const emojiName = normalizeEmojiName(requestedName || source.inferredName);
+
+  const createdEmoji = await interaction.guild.emojis.create({
+    attachment: source.attachment,
+    name: emojiName,
+    reason: `외부 이모지 추가: ${interaction.user.tag}`
+  });
+
+  await interaction.editReply(`이모지를 추가했습니다: ${createdEmoji} \`:${createdEmoji.name}:\``);
 }
 
 function buildVerifyPanelPayload() {
@@ -184,17 +302,58 @@ function formatConfiguredSettings(guildSettings) {
   ].join('\n');
 }
 
-function replaceWelcomeTokens(value, member) {
-  const replacements = {
-    '{user}': member.user.username,
-    '{tag}': member.user.tag,
-    '{mention}': `${member}`,
-    '{server}': member.guild.name,
-    '{memberCount}': String(member.guild.memberCount || '')
-  };
+function formatDiscordTimestamp(dateOrTimestamp, style = 'F') {
+  const timestamp = dateOrTimestamp ? Math.floor(Number(dateOrTimestamp) / 1000) : Math.floor(Date.now() / 1000);
+  return `<t:${timestamp}:${style}>`;
+}
 
-  return Object.entries(replacements).reduce(
-    (result, [token, replacement]) => result.replaceAll(token, replacement),
+function getMemberDisplayName(member) {
+  return member.displayName || member.user.globalName || member.user.username;
+}
+
+function getInviterTokens(inviterInfo) {
+  if (!inviterInfo) {
+    return {
+      inviter: '알 수 없음',
+      inviterMention: '알 수 없음',
+      inviterName: '알 수 없음',
+      inviterTag: '알 수 없음'
+    };
+  }
+
+  return {
+    inviter: inviterInfo.mention || inviterInfo.tag || inviterInfo.username || '알 수 없음',
+    inviterMention: inviterInfo.mention || '알 수 없음',
+    inviterName: inviterInfo.username || inviterInfo.tag || '알 수 없음',
+    inviterTag: inviterInfo.tag || inviterInfo.username || '알 수 없음'
+  };
+}
+
+function buildMemberLogTokens(member, inviterInfo = null) {
+  const now = Date.now();
+  const joinedTimestamp = member.joinedTimestamp || now;
+  const createdTimestamp = member.user.createdTimestamp || now;
+
+  return {
+    user: member.user.username,
+    displayName: getMemberDisplayName(member),
+    tag: member.user.tag,
+    mention: `${member}`,
+    server: member.guild.name,
+    memberCount: String(member.guild.memberCount || ''),
+    joinedAt: formatDiscordTimestamp(joinedTimestamp, 'F'),
+    joinedRelative: formatDiscordTimestamp(joinedTimestamp, 'R'),
+    leftAt: formatDiscordTimestamp(now, 'F'),
+    leftRelative: formatDiscordTimestamp(now, 'R'),
+    createdAt: formatDiscordTimestamp(createdTimestamp, 'F'),
+    createdRelative: formatDiscordTimestamp(createdTimestamp, 'R'),
+    ...getInviterTokens(inviterInfo)
+  };
+}
+
+function replaceMemberLogTokens(value, tokens) {
+  return Object.entries(tokens).reduce(
+    (result, [token, replacement]) => result.replaceAll(`{${token}}`, replacement),
     value || ''
   );
 }
@@ -204,67 +363,111 @@ function parseEmbedColor(value) {
   return Number.parseInt(value.slice(1), 16);
 }
 
-async function sendWelcomeMessage(member) {
-  const guildSettings = await getGuildSettings(member.guild.id);
-  const welcome = guildSettings.welcome;
+function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
+  const tokens = buildMemberLogTokens(member, inviterInfo);
+  const isWelcome = type === 'welcome';
+  const defaultTitle = isWelcome ? '{memberCount}번째 멤버가 입장했어요' : '{user} 님이 서버를 떠났어요';
+  const title = replaceMemberLogTokens(settings.embedTitle || defaultTitle, tokens);
+  const extraMessage = replaceMemberLogTokens(settings.message || '', tokens);
+  const contentParts = [settings.emojiText || ''];
 
-  if (!welcome?.enabled || !welcome.channelId) return;
+  if (settings.mentionUser) {
+    contentParts.push(tokens.mention);
+  }
 
-  const channel = await member.guild.channels.fetch(welcome.channelId).catch(() => null);
-  if (!channel || channel.type !== ChannelType.GuildText) return;
+  const content = contentParts.filter(Boolean).join(' ');
+  const allowedMentions = settings.mentionUser ? { users: [member.id], roles: [] } : { users: [], roles: [] };
 
-  const title = replaceWelcomeTokens(welcome.embedTitle || '{user} 님 환영합니다', member);
-  const description = [
-    replaceWelcomeTokens(welcome.message || '{mention} 님, {server}에 오신 것을 환영합니다!', member),
-    welcome.emojiText || ''
-  ].filter(Boolean).join('\n');
-  const content = welcome.mentionUser ? `${member}` : '';
-  const allowedMentions = welcome.mentionUser ? { users: [member.id], roles: [] } : { users: [], roles: [] };
+  if (settings.useEmbed === false) {
+    const plainLines = [
+      title,
+      extraMessage,
+      `유저: ${tokens.mention} (${tokens.displayName})`,
+      isWelcome
+        ? `서버에 입장한 시간: ${tokens.joinedAt} (${tokens.joinedRelative})`
+        : `서버에서 퇴장한 시간: ${tokens.leftAt} (${tokens.leftRelative})`,
+      `계정 생성일: ${tokens.createdAt} (${tokens.createdRelative})`
+    ];
 
-  if (welcome.useEmbed === false) {
-    await channel.send({
-      content: [content, description].filter(Boolean).join('\n'),
+    if (isWelcome && settings.showInviter !== false) {
+      plainLines.push(`초대자: ${tokens.inviterMention} (${tokens.inviterName})`);
+    }
+
+    return {
+      content: [content, ...plainLines].filter(Boolean).join('\n'),
       allowedMentions
-    });
-    return;
+    };
   }
 
   const embed = new EmbedBuilder()
-    .setTitle(title || '환영합니다')
-    .setDescription(description || `${member} 님 환영합니다!`)
-    .setColor(parseEmbedColor(welcome.embedColor))
+    .setTitle(title || (isWelcome ? '입장 로그' : '퇴장 로그'))
+    .setColor(parseEmbedColor(settings.embedColor))
+    .addFields(
+      {
+        name: '유저',
+        value: `${tokens.mention} (${tokens.displayName})`,
+        inline: false
+      },
+      {
+        name: isWelcome ? '서버에 입장한 시간' : '서버에서 퇴장한 시간',
+        value: isWelcome
+          ? `${tokens.joinedAt} (${tokens.joinedRelative})`
+          : `${tokens.leftAt} (${tokens.leftRelative})`,
+        inline: false
+      },
+      {
+        name: '계정 생성일',
+        value: `${tokens.createdAt} (${tokens.createdRelative})`,
+        inline: false
+      }
+    )
     .setTimestamp();
 
-  if (welcome.showProfileImage !== false) {
+  if (extraMessage) {
+    embed.setDescription(extraMessage);
+  }
+
+  if (isWelcome && settings.showInviter !== false) {
+    embed.addFields({
+      name: '초대자',
+      value: `${tokens.inviterMention} (${tokens.inviterName})`,
+      inline: false
+    });
+  }
+
+  if (settings.showProfileImage !== false) {
     embed.setThumbnail(member.user.displayAvatarURL({ extension: 'png', size: 256 }));
   }
 
-  await channel.send({
-    content,
+  const payload = {
     embeds: [embed],
     allowedMentions
-  });
+  };
+
+  if (content) {
+    payload.content = content;
+  }
+
+  return payload;
 }
 
-async function sendVerificationLog(interaction, approved, result, roleName, guildSettings) {
-  const logChannelId = getConfiguredLogChannelId(guildSettings);
-  if (!logChannelId) return;
+async function sendMemberLog(member, settings, type, inviterInfo = null) {
+  if (!settings?.enabled || !settings.channelId) return;
 
-  const channel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
+  const channel = await member.guild.channels.fetch(settings.channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildText) return;
 
-  await channel.send({
-    content: [
-      `인증 ${approved ? '승인' : '거절'}: <@${interaction.user.id}>`,
-      `문서: ${result.document_type}`,
-      `판정: ${result.verification_path}`,
-      `학생 구분: ${result.student_school_level}`,
-      `문구: ${result.required_phrase_text_matches ? '일치' : '불일치'}`,
-      `신뢰도: ${Number(result.confidence).toFixed(2)}`,
-      approved ? `지급 역할: ${roleName}` : `사유: ${result.reason}`
-    ].join('\n'),
-    allowedMentions: { users: [] }
-  });
+  await channel.send(buildMemberLogPayload(member, settings, type, inviterInfo));
+}
+
+async function sendWelcomeMessage(member, inviterInfo = null) {
+  const guildSettings = await getGuildSettings(member.guild.id);
+  await sendMemberLog(member, guildSettings.welcome, 'welcome', inviterInfo);
+}
+
+async function sendLeaveMessage(member) {
+  const guildSettings = await getGuildSettings(member.guild.id);
+  await sendMemberLog(member, guildSettings.leave, 'leave');
 }
 
 function sanitizeTicketChannelName(user) {
@@ -740,8 +943,73 @@ async function handleSettings(interaction) {
   await interaction.editReply(`설정을 저장했습니다.\n${formatConfiguredSettings(guildSettings)}`);
 }
 
+function serializeInvite(invite) {
+  return {
+    code: invite.code,
+    uses: invite.uses || 0,
+    inviterId: invite.inviter?.id || null,
+    inviterTag: invite.inviter?.tag || invite.inviter?.username || null,
+    inviterUsername: invite.inviter?.username || null
+  };
+}
+
+async function refreshInviteCache(guild) {
+  try {
+    const invites = await guild.invites.fetch();
+    const inviteMap = new Map();
+
+    invites.forEach((invite) => {
+      inviteMap.set(invite.code, serializeInvite(invite));
+    });
+
+    inviteCache.set(guild.id, inviteMap);
+    return inviteMap;
+  } catch (error) {
+    console.warn(`초대 목록을 불러오지 못했습니다 (${guild.id}): ${error.message}`);
+    if (!inviteCache.has(guild.id)) inviteCache.set(guild.id, new Map());
+    return inviteCache.get(guild.id);
+  }
+}
+
+async function resolveInviteUse(guild) {
+  const previousInvites = inviteCache.get(guild.id) || new Map();
+
+  try {
+    const currentInvites = await guild.invites.fetch();
+    let usedInvite = null;
+    const nextInvites = new Map();
+
+    currentInvites.forEach((invite) => {
+      const serialized = serializeInvite(invite);
+      const previous = previousInvites.get(invite.code);
+
+      if (!usedInvite && previous && serialized.uses > previous.uses) {
+        usedInvite = serialized;
+      }
+
+      nextInvites.set(invite.code, serialized);
+    });
+
+    inviteCache.set(guild.id, nextInvites);
+
+    if (!usedInvite) return null;
+
+    return {
+      id: usedInvite.inviterId,
+      username: usedInvite.inviterUsername,
+      tag: usedInvite.inviterTag,
+      mention: usedInvite.inviterId ? `<@${usedInvite.inviterId}>` : null
+    };
+  } catch (error) {
+    console.warn(`초대 사용자를 확인하지 못했습니다 (${guild.id}): ${error.message}`);
+    return null;
+  }
+}
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`${readyClient.user.tag} 로그인 완료`);
+
+  await Promise.all([...readyClient.guilds.cache.values()].map((guild) => refreshInviteCache(guild)));
 
   if (!config.autoRegisterUpdateCommand) return;
 
@@ -830,6 +1098,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.commandName === commandNames.addEmoji) {
+      await handleAddEmoji(interaction);
+      return;
+    }
+
     if (interaction.commandName === commandNames.ping) {
       await handlePing(interaction);
       return;
@@ -853,9 +1126,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
-    await sendWelcomeMessage(member);
+    const inviterInfo = await resolveInviteUse(member.guild);
+    await sendWelcomeMessage(member, inviterInfo);
   } catch (error) {
     console.error(`환영 메시지 전송 실패 (${member.guild.id}/${member.id}): ${error.message}`);
+  }
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    await sendLeaveMessage(member);
+  } catch (error) {
+    console.error(`퇴장 로그 전송 실패 (${member.guild.id}/${member.id}): ${error.message}`);
+  }
+});
+
+client.on(Events.InviteCreate, async (invite) => {
+  if (invite.guild) {
+    await refreshInviteCache(invite.guild);
+  }
+});
+
+client.on(Events.InviteDelete, async (invite) => {
+  if (invite.guild) {
+    await refreshInviteCache(invite.guild);
   }
 });
 
