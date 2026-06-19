@@ -46,6 +46,7 @@ export const config = {
   verificationMinConfidence: readNumber(process.env.VERIFICATION_MIN_CONFIDENCE, 0.72),
   religionRolePrefix: process.env.RELIGION_ROLE_PREFIX || '종교 | ',
   religionChoices: readList(process.env.RELIGION_CHOICES, defaultReligions).slice(0, 25),
+  religionExtraRoleId: process.env.RELIGION_EXTRA_ROLE_ID || '1517171553102467153',
   mbtiRolePrefix: process.env.MBTI_ROLE_PREFIX || 'MBTI | ',
   maxImageBytes: Math.round(readNumber(process.env.MAX_IMAGE_MB, 8) * 1024 * 1024),
   autoRegisterUpdateCommand: readBoolean(process.env.AUTO_REGISTER_UPDATE_COMMAND, true),
