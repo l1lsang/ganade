@@ -7,6 +7,8 @@ export const commandNames = {
   religion: '종교선택',
   settings: '설정',
   panel: '패널',
+  verifyPanel: '인증패널',
+  religionPanel: '종교패널',
   ping: '핑'
 };
 
@@ -51,12 +53,34 @@ export function buildCommands() {
       ),
     new SlashCommandBuilder()
       .setName(commandNames.panel)
-      .setDescription('인증과 종교 선택을 진행할 수 있는 UI 패널을 보냅니다.')
+      .setDescription('인증 패널과 종교 역할 패널을 따로 보냅니다.')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addChannelOption((option) =>
         option
           .setName('채널')
           .setDescription('패널을 보낼 채널')
+          .setRequired(false)
+          .addChannelTypes(ChannelType.GuildText)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.verifyPanel)
+      .setDescription('인증 전용 UI 패널을 보냅니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName('채널')
+          .setDescription('인증 패널을 보낼 채널')
+          .setRequired(false)
+          .addChannelTypes(ChannelType.GuildText)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.religionPanel)
+      .setDescription('종교 역할 선택 전용 UI 패널을 보냅니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName('채널')
+          .setDescription('종교 역할 패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
       ),

@@ -104,14 +104,14 @@ async function fetchMember(interaction) {
   return interaction.guild.members.fetch(interaction.user.id);
 }
 
-function buildPanelPayload() {
+function buildVerifyPanelPayload() {
   const embed = new EmbedBuilder()
-    .setTitle('인증 및 역할 선택')
+    .setTitle('인증')
     .setDescription([
       `주민등록증 또는 고등학생 학생증과 "${config.requiredPhrase}" 문구 종이를 준비해 주세요.`,
-      '아래에서 인증 안내를 확인하고, 종교 역할은 드롭다운 또는 직접 입력으로 선택할 수 있습니다.'
+      '아래 버튼을 눌러 인증 사진 제출 방법을 확인하세요.'
     ].join('\n'))
-    .setColor(0x5865f2);
+    .setColor(0x57f287);
 
   const verifyRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -119,6 +119,18 @@ function buildPanelPayload() {
       .setLabel('인증 시작')
       .setStyle(ButtonStyle.Primary)
   );
+
+  return {
+    embeds: [embed],
+    components: [verifyRow]
+  };
+}
+
+function buildReligionPanelPayload() {
+  const embed = new EmbedBuilder()
+    .setTitle('종교 역할 선택')
+    .setDescription('아래 드롭다운에서 종교를 선택하거나, 목록에 없으면 직접 입력하세요.')
+    .setColor(0x5865f2);
 
   const religionOptions = config.religionChoices.map((name) => ({
     label: name,
@@ -143,7 +155,7 @@ function buildPanelPayload() {
 
   return {
     embeds: [embed],
-    components: [verifyRow, religionSelectRow, customReligionRow]
+    components: [religionSelectRow, customReligionRow]
   };
 }
 
@@ -319,28 +331,63 @@ async function handleUpdate(interaction) {
   await interaction.editReply(`${target} 명령어 ${result.count}개를 동기화했습니다.`);
 }
 
-async function handlePanel(interaction) {
-  if (!interaction.inGuild()) {
-    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
-    return;
-  }
-
-  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
-  if (!hasPermission) {
-    await interaction.reply({ content: '패널 생성은 서버 관리 권한이 필요합니다.', ephemeral: true });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
+async function getPanelTargetChannel(interaction) {
   const targetChannel = interaction.options.getChannel('채널') || interaction.channel;
 
   if (!targetChannel?.isTextBased()) {
     throw new Error('패널을 보낼 텍스트 채널을 찾을 수 없습니다.');
   }
 
-  await targetChannel.send(buildPanelPayload());
-  await interaction.editReply(`${targetChannel} 채널에 인증 UI 패널을 보냈습니다.`);
+  return targetChannel;
+}
+
+async function assertCanCreatePanel(interaction, permissionMessage) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return false;
+  }
+
+  const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+  if (!hasPermission) {
+    await interaction.reply({ content: permissionMessage, ephemeral: true });
+    return false;
+  }
+
+  return true;
+}
+
+async function handlePanel(interaction) {
+  if (!(await assertCanCreatePanel(interaction, '패널 생성은 서버 관리 권한이 필요합니다.'))) return;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = await getPanelTargetChannel(interaction);
+
+  await targetChannel.send(buildVerifyPanelPayload());
+  await targetChannel.send(buildReligionPanelPayload());
+  await interaction.editReply(`${targetChannel} 채널에 인증 패널과 종교 역할 패널을 따로 보냈습니다.`);
+}
+
+async function handleVerifyPanel(interaction) {
+  if (!(await assertCanCreatePanel(interaction, '인증 패널 생성은 서버 관리 권한이 필요합니다.'))) return;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = await getPanelTargetChannel(interaction);
+
+  await targetChannel.send(buildVerifyPanelPayload());
+  await interaction.editReply(`${targetChannel} 채널에 인증 패널을 보냈습니다.`);
+}
+
+async function handleReligionPanel(interaction) {
+  if (!(await assertCanCreatePanel(interaction, '종교 역할 패널 생성은 서버 관리 권한이 필요합니다.'))) return;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = await getPanelTargetChannel(interaction);
+
+  await targetChannel.send(buildReligionPanelPayload());
+  await interaction.editReply(`${targetChannel} 채널에 종교 역할 패널을 보냈습니다.`);
 }
 
 async function handleVerifyGuide(interaction) {
@@ -471,6 +518,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.panel) {
       await handlePanel(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.verifyPanel) {
+      await handleVerifyPanel(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.religionPanel) {
+      await handleReligionPanel(interaction);
       return;
     }
 
