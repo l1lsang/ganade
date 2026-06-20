@@ -31,14 +31,22 @@ import {
   normalizeBibleSchedule,
   startBibleScheduler
 } from './bible-scheduler.js';
+import {
+  birthdayCustomIds,
+  handleBirthdayCommand,
+  handleBirthdayModal,
+  handleBirthdayRegisterButton,
+  handleBirthdayRemoveButton,
+  startBirthdayScheduler
+} from './birthday.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
 import {
   addGanadiAffection,
   buildGanadiAffectionBar,
-  ganadiAffectionMax,
   getGanadiAffection,
-  getGanadiAffectionTier
+  getGanadiAffectionTier,
+  getNextGanadiAffectionGoal
 } from './ganadi-affection.js';
 import { generateGanadiReply, shouldRespondToGanadi } from './ganadi-chat.js';
 import { startHealthServer } from './health-server.js';
@@ -162,14 +170,16 @@ async function replyAsGanadi(message) {
   if (!startGanadiCooldown(message)) return false;
 
   await message.channel.sendTyping().catch(() => null);
-  const reply = await generateGanadiReply(openai, {
+  const currentAffection = await getGanadiAffection(message.guildId, message.author.id);
+  const result = await generateGanadiReply(openai, {
     content: message.content,
     model: config.openaiChatModel,
+    affection: currentAffection.score,
     maxInputCharacters: config.ganadiChatMaxInputCharacters
   });
 
   await message.reply({
-    content: reply,
+    content: result.reply,
     allowedMentions: {
       parse: [],
       repliedUser: false
@@ -179,7 +189,7 @@ async function replyAsGanadi(message) {
   await addGanadiAffection(
     message.guildId,
     message.author.id,
-    config.ganadiAffectionPerReply,
+    result.affectionDelta,
     buildLevelProfile(message.author, message.member)
   ).catch((error) => {
     console.error(`가나디 호감도 저장 실패 (${message.guildId}/${message.author.id}): ${error.message}`);
@@ -2052,17 +2062,16 @@ async function handleBibleMessage(interaction) {
   await interaction.editReply('지원하지 않는 성경 말씀 명령입니다.');
 }
 
-function getNextGanadiAffectionGoal(score) {
-  return [60, 75, 90, 105, ganadiAffectionMax].find((goal) => score < goal) || null;
-}
-
 function buildGanadiAffectionEmbed(targetUser, affection) {
   const tier = getGanadiAffectionTier(affection.score);
   const nextGoal = getNextGanadiAffectionGoal(affection.score);
   const displayName = targetUser.globalName || targetUser.username;
   const progressText = nextGoal
     ? `다음 관계까지 **${nextGoal - affection.score}** 남았어!`
-    : '가나디와 **최고 호감도**를 달성했어!';
+    : '가나디와의 관계는 **상한 없이 계속 깊어질 수 있어!**';
+  const latestChange = affection.lastChange > 0
+    ? `+${affection.lastChange.toLocaleString('ko-KR')}`
+    : affection.lastChange.toLocaleString('ko-KR');
 
   return new EmbedBuilder()
     .setColor(tier.color)
@@ -2070,15 +2079,22 @@ function buildGanadiAffectionEmbed(targetUser, affection) {
     .setThumbnail(targetUser.displayAvatarURL({ extension: 'png', size: 256 }))
     .setDescription([
       `## ${tier.emoji} ${tier.name}`,
-      `${buildGanadiAffectionBar(affection.score)}  **${affection.score} / ${ganadiAffectionMax}**`,
+      `${buildGanadiAffectionBar(affection.score)}  **호감도 ${affection.score.toLocaleString('ko-KR')}**`,
       progressText
     ].join('\n'))
-    .addFields({
-      name: '가나디와 나눈 대화',
-      value: `총 **${affection.interactions.toLocaleString('ko-KR')}회**`,
-      inline: true
-    })
-    .setFooter({ text: '호감도는 50에서 시작하며 가나디가 답할 때마다 올라가듀!' })
+    .addFields(
+      {
+        name: '가나디와 나눈 대화',
+        value: `총 **${affection.interactions.toLocaleString('ko-KR')}회**`,
+        inline: true
+      },
+      {
+        name: '최근 변화',
+        value: affection.interactions > 0 ? `**${latestChange}**` : '**아직 없음**',
+        inline: true
+      }
+    )
+    .setFooter({ text: '50에서 시작 · 최저 -99,999 · 상한 없음 · 말의 의도와 강도에 따라 변해듀!' })
     .setTimestamp();
 }
 
@@ -2188,6 +2204,9 @@ client.once(Events.ClientReady, async (readyClient) => {
     `가나디 안부 스케줄러 시작 (KST 아침 ${bibleSchedule.morning}, 점심 ${bibleSchedule.lunch}, 저녁 ${bibleSchedule.evening}, 말씀 1일 1회)`
   );
 
+  startBirthdayScheduler(readyClient);
+  console.log('생일 축하 스케줄러 시작 (KST 오전 09:00 이후, 하루 1회)');
+
   if (!config.autoRegisterUpdateCommand) return;
 
   try {
@@ -2255,6 +2274,16 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isButton()) {
+      if (interaction.customId === birthdayCustomIds.register) {
+        await handleBirthdayRegisterButton(interaction);
+        return;
+      }
+
+      if (interaction.customId === birthdayCustomIds.remove) {
+        await handleBirthdayRemoveButton(interaction);
+        return;
+      }
+
       if (interaction.customId === customIds.verifyGuide) {
         await handleVerifyGuide(interaction);
         return;
@@ -2293,6 +2322,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId === customIds.religionCustomModal) {
       await handleCustomReligionModal(interaction);
+      return;
+    }
+
+    if (interaction.isModalSubmit() && interaction.customId === birthdayCustomIds.modal) {
+      await handleBirthdayModal(interaction);
       return;
     }
 
@@ -2370,6 +2404,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.bibleMessage) {
       await handleBibleMessage(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.birthday) {
+      await handleBirthdayCommand(interaction);
       return;
     }
 

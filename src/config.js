@@ -42,10 +42,6 @@ export const config = {
   openaiChatModel: process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini',
   ganadiChatEnabled: readBoolean(process.env.GANADI_CHAT_ENABLED, true),
   ganadiChatCooldownMs: Math.max(0, readNumber(process.env.GANADI_CHAT_COOLDOWN_SECONDS, 5) * 1000),
-  ganadiAffectionPerReply: Math.max(
-    0,
-    Math.min(10, Math.floor(readNumber(process.env.GANADI_AFFECTION_PER_REPLY, 1)))
-  ),
   ganadiChatMaxInputCharacters: Math.max(
     100,
     Math.min(4000, Math.floor(readNumber(process.env.GANADI_CHAT_MAX_INPUT_CHARS, 1200)))

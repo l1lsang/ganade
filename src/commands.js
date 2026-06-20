@@ -17,6 +17,7 @@ export const commandNames = {
   anonymousMessage: '익명',
   selfIntroduction: '자기소개',
   bibleMessage: '성경말씀',
+  birthday: '생일',
   ganadi: '가나디',
   level: '레벨',
   levelRanking: '랭킹',
@@ -319,6 +320,32 @@ export function buildCommands() {
         subcommand
           .setName('상태')
           .setDescription('현재 안부 채널과 한국 시간 예약을 확인합니다.')
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.birthday)
+      .setDescription('생일 등록 UI와 자동 축하 기능을 설정합니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('설정')
+          .setDescription('생일 등록 채널과 버튼 UI를 준비합니다.')
+          .addChannelOption((option) =>
+            option
+              .setName('채널')
+              .setDescription('기존 채널을 사용하려면 선택, 비워두면 새 채널 생성')
+              .setRequired(false)
+              .addChannelTypes(ChannelType.GuildText)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('해제')
+          .setDescription('생일 등록과 자동 축하를 중단합니다.')
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('상태')
+          .setDescription('생일 채널과 등록 인원을 확인합니다.')
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ganadi)

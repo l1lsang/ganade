@@ -29,19 +29,26 @@ test('Responses API에 캐릭터 지침을 전달하고 답변을 정리한다',
     responses: {
       create: async (params) => {
         request = params;
-        return { output_text: '  듀! 나 불렀어?  ' };
+        return { output_text: JSON.stringify({ reply: '  듀! 나 불렀어?  ', affectionDelta: 3 }) };
       }
     }
   };
 
-  const reply = await generateGanadiReply(openai, {
+  const result = await generateGanadiReply(openai, {
     content: '듀 안녕',
-    model: 'test-model'
+    model: 'test-model',
+    affection: -250
   });
 
-  assert.equal(reply, '듀! 나 불렀어?');
+  assert.deepEqual(result, { reply: '듀! 나 불렀어?', affectionDelta: 3 });
   assert.equal(request.model, 'test-model');
-  assert.equal(request.input, '듀 안녕');
+  assert.deepEqual(JSON.parse(request.input), {
+    currentAffection: -250,
+    userMessage: '듀 안녕'
+  });
   assert.equal(request.instructions, ganadiCharacterPrompt);
+  assert.equal(request.text.format.type, 'json_schema');
+  assert.equal(request.text.format.strict, true);
+  assert.deepEqual(request.text.format.schema.required, ['reply', 'affectionDelta']);
   assert.equal(request.max_output_tokens, 300);
 });
