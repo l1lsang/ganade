@@ -34,6 +34,13 @@ const defaultReligions = [
 ];
 
 export const config = {
+  dataStorageDriver: (process.env.DATA_STORAGE_DRIVER || 'firebase').trim().toLowerCase(),
+  firebaseDatabaseUrl: process.env.FIREBASE_DATABASE_URL || null,
+  firebaseDatabaseRoot: process.env.FIREBASE_DATABASE_ROOT || 'ganadi-bot',
+  firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || null,
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || null,
+  firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL || null,
+  firebasePrivateKey: process.env.FIREBASE_PRIVATE_KEY || null,
   discordToken: process.env.DISCORD_TOKEN,
   discordClientId: process.env.DISCORD_CLIENT_ID,
   discordGuildId: process.env.DISCORD_GUILD_ID || null,

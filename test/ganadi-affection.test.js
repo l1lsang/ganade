@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const affectionDataPath = path.join(os.tmpdir(), `ganadi-affection-test-${process.pid}.json`);
+process.env.DATA_STORAGE_DRIVER = 'local';
 process.env.GANADI_AFFECTION_DATA_PATH = affectionDataPath;
 
 const affection = await import(`../src/ganadi-affection.js?test=${Date.now()}`);

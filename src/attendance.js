@@ -1,7 +1,12 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createJsonDataStore } from './data-store.js';
 
-const attendancePath = path.join(process.cwd(), 'data', 'attendance.json');
+const explicitAttendancePath = process.env.ATTENDANCE_DATA_PATH;
+const attendancePath = explicitAttendancePath || path.join(process.cwd(), 'data', 'attendance.json');
+const attendanceStore = createJsonDataStore({
+  name: 'attendance',
+  localPath: attendancePath
+});
 const dateFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'Asia/Seoul',
   year: 'numeric',
@@ -11,28 +16,25 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
 const oneDayMs = 24 * 60 * 60 * 1000;
 
 let attendanceCache = null;
+let mutationQueue = Promise.resolve();
 
 async function readAllAttendance() {
   if (attendanceCache) return attendanceCache;
 
-  try {
-    const raw = await readFile(attendancePath, 'utf8');
-    attendanceCache = JSON.parse(raw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-
-    attendanceCache = {};
-  }
+  attendanceCache = await attendanceStore.read();
 
   return attendanceCache;
 }
 
 async function writeAllAttendance(attendance) {
-  await mkdir(path.dirname(attendancePath), { recursive: true });
-  await writeFile(attendancePath, `${JSON.stringify(attendance, null, 2)}\n`, 'utf8');
+  await attendanceStore.write(attendance);
   attendanceCache = attendance;
+}
+
+function enqueueAttendanceMutation(mutator) {
+  const task = mutationQueue.then(async () => mutator(await readAllAttendance()));
+  mutationQueue = task.catch(() => null);
+  return task;
 }
 
 function getKstDateKey(date = new Date()) {
@@ -56,51 +58,53 @@ function normalizeStats(stats = {}) {
 }
 
 export async function registerAttendance(guildId, userId, now = new Date()) {
-  const attendance = await readAllAttendance();
-  const guildAttendance = attendance[guildId] || { users: {} };
-  const users = guildAttendance.users || {};
-  const currentStats = normalizeStats(users[userId]);
-  const today = getKstDateKey(now);
+  return enqueueAttendanceMutation(async (attendance) => {
+    const guildAttendance = attendance[guildId] || { users: {} };
+    const users = guildAttendance.users || {};
+    const currentStats = normalizeStats(users[userId]);
+    const today = getKstDateKey(now);
 
-  if (currentStats.lastDate === today) {
-    return {
-      ...currentStats,
-      date: today,
-      alreadyChecked: true
+    if (currentStats.lastDate === today) {
+      return {
+        ...currentStats,
+        date: today,
+        alreadyChecked: true
+      };
+    }
+
+    const yesterday = getKstDateKey(new Date(now.getTime() - oneDayMs));
+    const streak = currentStats.lastDate === yesterday ? currentStats.streak + 1 : 1;
+    const total = currentStats.total + 1;
+    const bestStreak = Math.max(currentStats.bestStreak, streak);
+    const nextStats = {
+      total,
+      streak,
+      bestStreak,
+      lastDate: today,
+      updatedAt: now.toISOString()
     };
-  }
 
-  const yesterday = getKstDateKey(new Date(now.getTime() - oneDayMs));
-  const streak = currentStats.lastDate === yesterday ? currentStats.streak + 1 : 1;
-  const total = currentStats.total + 1;
-  const bestStreak = Math.max(currentStats.bestStreak, streak);
-  const nextStats = {
-    total,
-    streak,
-    bestStreak,
-    lastDate: today,
-    updatedAt: now.toISOString()
-  };
+    attendance[guildId] = {
+      ...guildAttendance,
+      users: {
+        ...users,
+        [userId]: nextStats
+      },
+      updatedAt: now.toISOString()
+    };
 
-  attendance[guildId] = {
-    ...guildAttendance,
-    users: {
-      ...users,
-      [userId]: nextStats
-    },
-    updatedAt: now.toISOString()
-  };
+    await writeAllAttendance(attendance);
 
-  await writeAllAttendance(attendance);
-
-  return {
-    ...nextStats,
-    date: today,
-    alreadyChecked: false
-  };
+    return {
+      ...nextStats,
+      date: today,
+      alreadyChecked: false
+    };
+  });
 }
 
 export async function getAttendanceRanking(guildId, limit = 10) {
+  await mutationQueue;
   const attendance = await readAllAttendance();
   const users = attendance[guildId]?.users || {};
 
@@ -120,12 +124,12 @@ export async function getAttendanceRanking(guildId, limit = 10) {
 }
 
 export async function resetGuildAttendance(guildId) {
-  const attendance = await readAllAttendance();
+  return enqueueAttendanceMutation(async (attendance) => {
+    attendance[guildId] = {
+      users: {},
+      updatedAt: new Date().toISOString()
+    };
 
-  attendance[guildId] = {
-    users: {},
-    updatedAt: new Date().toISOString()
-  };
-
-  await writeAllAttendance(attendance);
+    await writeAllAttendance(attendance);
+  });
 }

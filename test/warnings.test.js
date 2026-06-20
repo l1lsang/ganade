@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const warningDataPath = path.join(os.tmpdir(), `warnings-test-${process.pid}.json`);
+process.env.DATA_STORAGE_DRIVER = 'local';
 process.env.WARNING_DATA_PATH = warningDataPath;
 
 const warnings = await import(`../src/warnings.js?test=${Date.now()}`);

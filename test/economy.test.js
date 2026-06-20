@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const economyDataPath = path.join(os.tmpdir(), `economy-test-${process.pid}.json`);
+process.env.DATA_STORAGE_DRIVER = 'local';
 process.env.ECONOMY_DATA_PATH = economyDataPath;
 
 const economy = await import(`../src/economy.js?test=${Date.now()}`);

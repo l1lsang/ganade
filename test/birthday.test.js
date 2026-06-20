@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const birthdayDataPath = path.join(os.tmpdir(), `birthday-test-${process.pid}.json`);
+process.env.DATA_STORAGE_DRIVER = 'local';
 process.env.BIRTHDAY_DATA_PATH = birthdayDataPath;
 
 const birthday = await import(`../src/birthday.js?test=${Date.now()}`);

@@ -1,33 +1,35 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createJsonDataStore } from './data-store.js';
 
-const warningsPath = process.env.WARNING_DATA_PATH
+const explicitWarningsPath = process.env.WARNING_DATA_PATH;
+const warningsPath = explicitWarningsPath
   || path.join(process.cwd(), 'data', 'warnings.json');
+const warningsStore = createJsonDataStore({
+  name: 'warnings',
+  localPath: warningsPath
+});
 const defaultBanThreshold = 3;
 
 let warningsCache = null;
+let mutationQueue = Promise.resolve();
 
 async function readAllWarnings() {
   if (warningsCache) return warningsCache;
 
-  try {
-    const raw = await readFile(warningsPath, 'utf8');
-    warningsCache = JSON.parse(raw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-
-    warningsCache = {};
-  }
+  warningsCache = await warningsStore.read();
 
   return warningsCache;
 }
 
 async function writeAllWarnings(warnings) {
-  await mkdir(path.dirname(warningsPath), { recursive: true });
-  await writeFile(warningsPath, `${JSON.stringify(warnings, null, 2)}\n`, 'utf8');
+  await warningsStore.write(warnings);
   warningsCache = warnings;
+}
+
+function enqueueWarningMutation(mutator) {
+  const task = mutationQueue.then(async () => mutator(await readAllWarnings()));
+  mutationQueue = task.catch(() => null);
+  return task;
 }
 
 function createRecordId(now = new Date()) {
@@ -80,25 +82,28 @@ function createWarningEvent(type, values, now = new Date()) {
 }
 
 async function updateGuildWarnings(guildId, updater) {
-  const warnings = await readAllWarnings();
-  const guildWarnings = normalizeGuildWarnings(warnings[guildId]);
-  const nextGuildWarnings = updater(guildWarnings);
+  return enqueueWarningMutation(async (warnings) => {
+    const guildWarnings = normalizeGuildWarnings(warnings[guildId]);
+    const nextGuildWarnings = updater(guildWarnings);
 
-  warnings[guildId] = {
-    ...nextGuildWarnings,
-    updatedAt: new Date().toISOString()
-  };
+    warnings[guildId] = {
+      ...nextGuildWarnings,
+      updatedAt: new Date().toISOString()
+    };
 
-  await writeAllWarnings(warnings);
-  return warnings[guildId];
+    await writeAllWarnings(warnings);
+    return warnings[guildId];
+  });
 }
 
 export async function getWarningConfig(guildId) {
+  await mutationQueue;
   const warnings = await readAllWarnings();
   return normalizeGuildWarnings(warnings[guildId]).config;
 }
 
 export async function getWarningSummary(guildId, userId) {
+  await mutationQueue;
   const warnings = await readAllWarnings();
   const guildWarnings = normalizeGuildWarnings(warnings[guildId]);
   const userWarnings = normalizeUserWarnings(guildWarnings.users[userId]);
@@ -266,6 +271,7 @@ export async function addWarningBanRecord(guildId, userId, moderatorId, reason, 
 }
 
 export async function getWarningHistory(guildId, userId = null) {
+  await mutationQueue;
   const warnings = await readAllWarnings();
   const guildWarnings = normalizeGuildWarnings(warnings[guildId]);
   const events = userId

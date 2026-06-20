@@ -41,6 +41,7 @@ import {
 } from './birthday.js';
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
+import { assertDataStorageReady } from './data-store.js';
 import {
   buildEconomyRankingReply,
   handleEconomyCommand,
@@ -98,6 +99,7 @@ import {
 } from './warnings.js';
 
 assertRequiredConfig();
+await assertDataStorageReady();
 
 const openai = config.openaiApiKey
   ? new OpenAI({

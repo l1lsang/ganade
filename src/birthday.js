@@ -1,4 +1,3 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ActionRowBuilder,
@@ -11,6 +10,7 @@ import {
   TextInputBuilder,
   TextInputStyle
 } from 'discord.js';
+import { createJsonDataStore } from './data-store.js';
 import { getGuildSettings, updateGuildSettings } from './settings.js';
 
 export const birthdayCustomIds = Object.freeze({
@@ -22,8 +22,13 @@ export const birthdayCustomIds = Object.freeze({
 
 export const defaultBirthdayAnnouncementTime = '09:00';
 
-const birthdayDataPath = process.env.BIRTHDAY_DATA_PATH
+const explicitBirthdayDataPath = process.env.BIRTHDAY_DATA_PATH;
+const birthdayDataPath = explicitBirthdayDataPath
   || path.join(process.cwd(), 'data', 'birthdays.json');
+const birthdayStore = createJsonDataStore({
+  name: 'birthdays',
+  localPath: birthdayDataPath
+});
 const daysByMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const deliveredAnnouncements = new Set();
 const koreanDateTimeFormatter = new Intl.DateTimeFormat('en-CA', {
@@ -95,19 +100,13 @@ function normalizeBirthdayRecord(record = {}) {
 async function readAllBirthdays() {
   if (birthdayCache) return birthdayCache;
 
-  try {
-    birthdayCache = JSON.parse(await readFile(birthdayDataPath, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    birthdayCache = {};
-  }
+  birthdayCache = await birthdayStore.read();
 
   return birthdayCache;
 }
 
 async function writeAllBirthdays(data) {
-  await mkdir(path.dirname(birthdayDataPath), { recursive: true });
-  await writeFile(birthdayDataPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  await birthdayStore.write(data);
   birthdayCache = data;
 }
 

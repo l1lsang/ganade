@@ -6,6 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const levelDataPath = path.join(os.tmpdir(), `babo-level-test-${process.pid}.json`);
+process.env.DATA_STORAGE_DRIVER = 'local';
 process.env.LEVEL_DATA_PATH = levelDataPath;
 process.env.LEVEL_CHAT_XP_PER_CHARACTER = '1';
 process.env.LEVEL_VOICE_XP_PER_MINUTE = '10';

@@ -1,33 +1,35 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { createJsonDataStore } from './data-store.js';
 
-const anonymousPath = path.join(process.cwd(), 'data', 'anonymous-chat.json');
+const explicitAnonymousPath = process.env.ANONYMOUS_DATA_PATH;
+const anonymousPath = explicitAnonymousPath || path.join(process.cwd(), 'data', 'anonymous-chat.json');
+const anonymousStore = createJsonDataStore({
+  name: 'anonymous-chat',
+  localPath: anonymousPath
+});
 const maxStoredMessages = 1000;
 
 let anonymousCache = null;
+let mutationQueue = Promise.resolve();
 
 async function readAllAnonymousData() {
   if (anonymousCache) return anonymousCache;
 
-  try {
-    const raw = await readFile(anonymousPath, 'utf8');
-    anonymousCache = JSON.parse(raw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-
-    anonymousCache = {};
-  }
+  anonymousCache = await anonymousStore.read();
 
   return anonymousCache;
 }
 
 async function writeAllAnonymousData(data) {
-  await mkdir(path.dirname(anonymousPath), { recursive: true });
-  await writeFile(anonymousPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  await anonymousStore.write(data);
   anonymousCache = data;
+}
+
+function enqueueAnonymousMutation(mutator) {
+  const task = mutationQueue.then(async () => mutator(await readAllAnonymousData()));
+  mutationQueue = task.catch(() => null);
+  return task;
 }
 
 function normalizeGuildAnonymousData(guildData = {}) {
@@ -77,52 +79,55 @@ export function normalizeAnonymousCode(rawCode) {
 }
 
 export async function getOrCreateAnonymousIdentity(guildId, user) {
-  const data = await readAllAnonymousData();
-  const guildData = normalizeGuildAnonymousData(data[guildId]);
-  const existing = guildData.users[user.id];
-  const now = new Date().toISOString();
-  const identity = {
-    userId: user.id,
-    code: existing?.code || createUniquePseudoIp(guildId, user.id, guildData),
-    username: user.username,
-    tag: user.tag,
-    createdAt: existing?.createdAt || now,
-    updatedAt: now
-  };
+  return enqueueAnonymousMutation(async (data) => {
+    const guildData = normalizeGuildAnonymousData(data[guildId]);
+    const existing = guildData.users[user.id];
+    const now = new Date().toISOString();
+    const identity = {
+      userId: user.id,
+      code: existing?.code || createUniquePseudoIp(guildId, user.id, guildData),
+      username: user.username,
+      tag: user.tag,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
 
-  data[guildId] = {
-    ...guildData,
-    users: {
-      ...guildData.users,
-      [user.id]: identity
-    },
-    updatedAt: now
-  };
+    data[guildId] = {
+      ...guildData,
+      users: {
+        ...guildData.users,
+        [user.id]: identity
+      },
+      updatedAt: now
+    };
 
-  await writeAllAnonymousData(data);
-  return identity;
+    await writeAllAnonymousData(data);
+    return identity;
+  });
 }
 
 export async function recordAnonymousMessage(guildId, values) {
-  const data = await readAllAnonymousData();
-  const guildData = normalizeGuildAnonymousData(data[guildId]);
-  const now = new Date().toISOString();
-  const messageRecord = {
-    createdAt: now,
-    ...values
-  };
+  return enqueueAnonymousMutation(async (data) => {
+    const guildData = normalizeGuildAnonymousData(data[guildId]);
+    const now = new Date().toISOString();
+    const messageRecord = {
+      createdAt: now,
+      ...values
+    };
 
-  data[guildId] = {
-    ...guildData,
-    messages: [...guildData.messages, messageRecord].slice(-maxStoredMessages),
-    updatedAt: now
-  };
+    data[guildId] = {
+      ...guildData,
+      messages: [...guildData.messages, messageRecord].slice(-maxStoredMessages),
+      updatedAt: now
+    };
 
-  await writeAllAnonymousData(data);
-  return messageRecord;
+    await writeAllAnonymousData(data);
+    return messageRecord;
+  });
 }
 
 export async function traceAnonymousCode(guildId, rawCode) {
+  await mutationQueue;
   const code = normalizeAnonymousCode(rawCode);
   const data = await readAllAnonymousData();
   const guildData = normalizeGuildAnonymousData(data[guildId]);

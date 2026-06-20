@@ -1,4 +1,3 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { randomInt, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
@@ -16,9 +15,15 @@ import {
   virtualStocks,
   weeklyQuestDefinitions
 } from './economy-catalog.js';
+import { createJsonDataStore } from './data-store.js';
 
-const economyPath = process.env.ECONOMY_DATA_PATH
+const explicitEconomyPath = process.env.ECONOMY_DATA_PATH;
+const economyPath = explicitEconomyPath
   || path.join(process.cwd(), 'data', 'economy.json');
+const economyStore = createJsonDataStore({
+  name: 'economy',
+  localPath: economyPath
+});
 const kstFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Seoul',
   year: 'numeric',
@@ -179,18 +184,12 @@ function normalizeGuild(raw = {}) {
 
 async function readAllEconomy() {
   if (economyCache) return economyCache;
-  try {
-    economyCache = JSON.parse(await readFile(economyPath, 'utf8'));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    economyCache = {};
-  }
+  economyCache = await economyStore.read();
   return economyCache;
 }
 
 async function writeAllEconomy(data) {
-  await mkdir(path.dirname(economyPath), { recursive: true });
-  await writeFile(economyPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  await economyStore.write(data);
   economyCache = data;
 }
 

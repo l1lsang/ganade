@@ -1,48 +1,52 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createJsonDataStore } from './data-store.js';
 
-const settingsPath = path.join(process.cwd(), 'data', 'guild-settings.json');
+const explicitSettingsPath = process.env.GUILD_SETTINGS_DATA_PATH;
+const settingsPath = explicitSettingsPath || path.join(process.cwd(), 'data', 'guild-settings.json');
+const settingsStore = createJsonDataStore({
+  name: 'guild-settings',
+  localPath: settingsPath
+});
 
 let settingsCache = null;
+let mutationQueue = Promise.resolve();
 
 async function readAllSettings() {
   if (settingsCache) return settingsCache;
 
-  try {
-    const raw = await readFile(settingsPath, 'utf8');
-    settingsCache = JSON.parse(raw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
-    }
-
-    settingsCache = {};
-  }
+  settingsCache = await settingsStore.read();
 
   return settingsCache;
 }
 
 async function writeAllSettings(settings) {
-  await mkdir(path.dirname(settingsPath), { recursive: true });
-  await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  await settingsStore.write(settings);
   settingsCache = settings;
 }
 
+function enqueueSettingsMutation(mutator) {
+  const task = mutationQueue.then(async () => mutator(await readAllSettings()));
+  mutationQueue = task.catch(() => null);
+  return task;
+}
+
 export async function getGuildSettings(guildId) {
+  await mutationQueue;
   const settings = await readAllSettings();
   return settings[guildId] || {};
 }
 
 export async function updateGuildSettings(guildId, changes) {
-  const settings = await readAllSettings();
-  const current = settings[guildId] || {};
+  return enqueueSettingsMutation(async (settings) => {
+    const current = settings[guildId] || {};
 
-  settings[guildId] = {
-    ...current,
-    ...changes,
-    updatedAt: new Date().toISOString()
-  };
+    settings[guildId] = {
+      ...current,
+      ...changes,
+      updatedAt: new Date().toISOString()
+    };
 
-  await writeAllSettings(settings);
-  return settings[guildId];
+    await writeAllSettings(settings);
+    return settings[guildId];
+  });
 }

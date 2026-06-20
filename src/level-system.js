@@ -1,8 +1,13 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config.js';
+import { createJsonDataStore } from './data-store.js';
 
-const levelDataPath = process.env.LEVEL_DATA_PATH || path.join(process.cwd(), 'data', 'levels.json');
+const explicitLevelDataPath = process.env.LEVEL_DATA_PATH;
+const levelDataPath = explicitLevelDataPath || path.join(process.cwd(), 'data', 'levels.json');
+const levelStore = createJsonDataStore({
+  name: 'levels',
+  localPath: levelDataPath
+});
 const activeVoiceSessions = new Map();
 
 let levelDataCache = null;
@@ -33,20 +38,13 @@ function normalizeUserStats(stats = {}) {
 async function readAllLevelData() {
   if (levelDataCache) return levelDataCache;
 
-  try {
-    const raw = await readFile(levelDataPath, 'utf8');
-    levelDataCache = JSON.parse(raw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    levelDataCache = {};
-  }
+  levelDataCache = await levelStore.read();
 
   return levelDataCache;
 }
 
 async function writeAllLevelData(data) {
-  await mkdir(path.dirname(levelDataPath), { recursive: true });
-  await writeFile(levelDataPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  await levelStore.write(data);
   levelDataCache = data;
 }
 

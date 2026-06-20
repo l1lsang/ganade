@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createJsonDataStore } from './data-store.js';
 
 export const ganadiAffectionInitial = 50;
 export const ganadiAffectionMin = -99999;
@@ -22,8 +22,13 @@ const affectionTiers = [
   { min: 10000, name: '끝없이 깊은 유대', emoji: '✨', color: 0x7c4dff }
 ];
 
-const affectionDataPath = process.env.GANADI_AFFECTION_DATA_PATH
+const explicitAffectionDataPath = process.env.GANADI_AFFECTION_DATA_PATH;
+const affectionDataPath = explicitAffectionDataPath
   || path.join(process.cwd(), 'data', 'ganadi-affection.json');
+const affectionStore = createJsonDataStore({
+  name: 'ganadi-affection',
+  localPath: affectionDataPath
+});
 
 let affectionCache = null;
 let mutationQueue = Promise.resolve();
@@ -56,20 +61,13 @@ function normalizeRecord(record = {}) {
 async function readAllAffection() {
   if (affectionCache) return affectionCache;
 
-  try {
-    const raw = await readFile(affectionDataPath, 'utf8');
-    affectionCache = JSON.parse(raw);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    affectionCache = {};
-  }
+  affectionCache = await affectionStore.read();
 
   return affectionCache;
 }
 
 async function writeAllAffection(data) {
-  await mkdir(path.dirname(affectionDataPath), { recursive: true });
-  await writeFile(affectionDataPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  await affectionStore.write(data);
   affectionCache = data;
 }
 
