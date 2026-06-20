@@ -56,7 +56,11 @@ import {
   getGanadiAffectionTier,
   getNextGanadiAffectionGoal
 } from './ganadi-affection.js';
-import { generateGanadiReply, shouldRespondToGanadi } from './ganadi-chat.js';
+import {
+  generateGanadiReply,
+  isGanadiChatChannel,
+  shouldRespondToGanadi
+} from './ganadi-chat.js';
 import { buildGanadiHelpEmbed } from './ganadi-help.js';
 import { getRandomGanadiPhoto } from './ganadi-photo.js';
 import { startHealthServer } from './health-server.js';
@@ -216,9 +220,14 @@ async function replyAsGanadi(message) {
   return true;
 }
 
-function enqueueGanadiReply(message) {
+async function enqueueGanadiReply(message) {
   if (!config.ganadiChatEnabled || !isGanadiChatTrigger(message)) {
-    return Promise.resolve(false);
+    return false;
+  }
+
+  const guildSettings = await getGuildSettings(message.guildId);
+  if (!isGanadiChatChannel(message.channelId, guildSettings.ganadiChatChannelId)) {
+    return false;
   }
 
   const queueKey = `${message.guildId}:${message.channelId}`;
@@ -550,7 +559,8 @@ function formatConfiguredSettings(guildSettings) {
     `관리자 역할: ${adminRoleId ? `<@&${adminRoleId}>` : '설정 안 됨'}`,
     `로그 채널: ${logChannelId ? `<#${logChannelId}>` : '설정 안 됨'}`,
     `MBTI 채널: ${guildSettings.mbtiChannelId ? `<#${guildSettings.mbtiChannelId}>` : '설정 안 됨'}`,
-    `익명채팅 채널: ${guildSettings.anonymousChannelId ? `<#${guildSettings.anonymousChannelId}>` : '설정 안 됨'}`
+    `익명채팅 채널: ${guildSettings.anonymousChannelId ? `<#${guildSettings.anonymousChannelId}>` : '설정 안 됨'}`,
+    `가나디 대화 채널: ${guildSettings.ganadiChatChannelId ? `<#${guildSettings.ganadiChatChannelId}>` : '설정 안 됨'}`
   ].join('\n');
 }
 
@@ -2570,6 +2580,56 @@ async function handleGanadiCommand(interaction) {
   }
 
   const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === '채널상태') {
+    const guildSettings = await getGuildSettings(interaction.guildId);
+    await interaction.reply({
+      content: guildSettings.ganadiChatChannelId
+        ? `현재 가나디 전용 대화 채널은 <#${guildSettings.ganadiChatChannelId}>입니다.`
+        : '가나디 전용 대화 채널이 아직 설정되지 않았습니다.',
+      ephemeral: true,
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
+
+  if (subcommand === '채널설정' || subcommand === '채널해제') {
+    const hasPermission = interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
+    if (!hasPermission) {
+      await interaction.reply({
+        content: '가나디 대화 채널 설정은 서버 관리 권한이 필요합니다.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    if (subcommand === '채널해제') {
+      await updateGuildSettings(interaction.guildId, { ganadiChatChannelId: null });
+      await interaction.reply({
+        content: '가나디 전용 대화 채널을 해제했습니다. 새 채널을 설정할 때까지 자연어 대화에 반응하지 않습니다.',
+        ephemeral: true
+      });
+      return;
+    }
+
+    const channel = interaction.options.getChannel('채널', true);
+    const permissions = channel.permissionsFor(interaction.guild.members.me);
+    if (!permissions?.has(PermissionsBitField.Flags.ViewChannel) || !permissions.has(PermissionsBitField.Flags.SendMessages)) {
+      await interaction.reply({
+        content: `봇이 ${channel} 채널을 보거나 메시지를 보낼 권한이 없습니다.`,
+        ephemeral: true
+      });
+      return;
+    }
+
+    await updateGuildSettings(interaction.guildId, { ganadiChatChannelId: channel.id });
+    await interaction.reply({
+      content: `${channel} 채널을 가나디 전용 대화 채널로 설정했습니다. 이제 이 채널에서만 이름 호출과 멘션에 반응합니다.`,
+      ephemeral: true,
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
 
   if (subcommand === '도움말') {
     const category = interaction.options.getString('분야') || 'start';

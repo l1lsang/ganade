@@ -59,6 +59,10 @@ export function shouldRespondToGanadi(content, mentioned = false) {
   return ganadiNamePattern.test(String(content || '').normalize('NFKC'));
 }
 
+export function isGanadiChatChannel(channelId, configuredChannelId) {
+  return Boolean(configuredChannelId && channelId === configuredChannelId);
+}
+
 export function normalizeGanadiInput(content, maxCharacters = 1200) {
   const normalized = String(content || '')
     .normalize('NFKC')

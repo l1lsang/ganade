@@ -56,11 +56,16 @@ test('호감도 단계와 진행 바를 만든다', () => {
   assert.equal(affection.buildGanadiAffectionBar(10000, 12), '▰▰▰▰▰▰▰▰▰▰▰▰');
 });
 
-test('/가나디 호감도와 사진 명령어를 제공한다', async () => {
+test('/가나디 호감도, 사진, 전용 채널 관리 명령어를 제공한다', async () => {
   const { buildCommands, commandNames } = await import('../src/commands.js');
   const command = buildCommands().find((entry) => entry.name === commandNames.ganadi);
   assert.ok(command);
   assert.equal(command.options[0].name, '호감도');
   assert.equal(command.options[0].options[0].name, '유저');
   assert.equal(command.options[1].name, '사진');
+  assert.deepEqual(
+    command.options.slice(3).map((option) => option.name),
+    ['채널설정', '채널해제', '채널상태']
+  );
+  assert.equal(command.options[3].options[0].name, '채널');
 });

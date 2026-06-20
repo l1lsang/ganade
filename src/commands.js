@@ -416,7 +416,7 @@ export function buildCommands() {
       ),
     new SlashCommandBuilder()
       .setName(commandNames.ganadi)
-      .setDescription('가나디와의 관계를 확인합니다.')
+      .setDescription('가나디 대화 채널과 관계 기능을 관리합니다.')
       .addSubcommand((subcommand) =>
         subcommand
           .setName('호감도')
@@ -444,6 +444,28 @@ export function buildCommands() {
               .setRequired(false)
               .addChoices(...ganadiHelpCategoryChoices)
           )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('채널설정')
+          .setDescription('가나디와 자연스럽게 대화할 전용 채널을 설정합니다.')
+          .addChannelOption((option) =>
+            option
+              .setName('채널')
+              .setDescription('가나디가 이름 호출과 멘션에 반응할 채널')
+              .setRequired(true)
+              .addChannelTypes(ChannelType.GuildText)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('채널해제')
+          .setDescription('가나디 전용 대화 채널 설정을 해제합니다.')
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('채널상태')
+          .setDescription('현재 가나디 전용 대화 채널을 확인합니다.')
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)
