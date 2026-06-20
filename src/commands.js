@@ -1,6 +1,7 @@
 import { ChannelType, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { config } from './config.js';
 import { buildEconomyCommands } from './economy-commands.js';
+import { ganadiHelpCategoryChoices } from './ganadi-help.js';
 
 export const commandNames = {
   update: '업데이트',
@@ -431,6 +432,18 @@ export function buildCommands() {
         subcommand
           .setName('사진')
           .setDescription('가나디 사진 중 한 장을 무작위로 보여 줍니다.')
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('도움말')
+          .setDescription('일반 멤버용 명령어를 분야별 임베드로 안내합니다.')
+          .addStringOption((option) =>
+            option
+              .setName('분야')
+              .setDescription('자세히 알아볼 명령어 분야, 비워두면 처음 시작하기')
+              .setRequired(false)
+              .addChoices(...ganadiHelpCategoryChoices)
+          )
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)

@@ -57,6 +57,7 @@ import {
   getNextGanadiAffectionGoal
 } from './ganadi-affection.js';
 import { generateGanadiReply, shouldRespondToGanadi } from './ganadi-chat.js';
+import { buildGanadiHelpEmbed } from './ganadi-help.js';
 import { getRandomGanadiPhoto } from './ganadi-photo.js';
 import { startHealthServer } from './health-server.js';
 import {
@@ -2568,8 +2569,19 @@ async function handleGanadiCommand(interaction) {
     return;
   }
 
-  await interaction.deferReply();
   const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === '도움말') {
+    const category = interaction.options.getString('분야') || 'start';
+    await interaction.reply({
+      embeds: [buildGanadiHelpEmbed(category)],
+      ephemeral: true,
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
+
+  await interaction.deferReply();
 
   if (subcommand === '사진') {
     const photo = await getRandomGanadiPhoto();
