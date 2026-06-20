@@ -10,6 +10,12 @@ export const mbtiAxes = [
 
 export const voiceActiveRoleName = '🔊 음성채팅 중';
 const voiceActiveRoleCreation = new Map();
+const preferenceRoleCreation = new Map();
+
+export const preferenceRoleChoices = Object.freeze({
+  nsfw: Object.freeze({ name: 'NSFW', color: 0xed4245 }),
+  menhera: Object.freeze({ name: '멘헤라', color: 0x9b59b6 })
+});
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -85,6 +91,42 @@ export async function getOrCreateVoiceActiveRole(guild) {
   });
 
   voiceActiveRoleCreation.set(guild.id, creation);
+  return creation;
+}
+
+export async function getOrCreatePreferenceRole(guild, roleKey) {
+  const definition = preferenceRoleChoices[roleKey];
+  if (!definition) throw new Error('지원하지 않는 취향 역할입니다.');
+
+  await guild.roles.fetch();
+
+  const existing = findRoleByName(guild, definition.name);
+  if (existing) {
+    assertRoleAssignable(guild, existing);
+    return existing;
+  }
+
+  const creationKey = `${guild.id}:${roleKey}`;
+  const pending = preferenceRoleCreation.get(creationKey);
+  if (pending) return pending;
+
+  const creation = (async () => {
+    assertCanManageRoles(guild);
+    const created = await guild.roles.create({
+      name: definition.name,
+      colors: { primaryColor: definition.color },
+      mentionable: false,
+      permissions: [],
+      reason: `취향 선택 역할 자동 생성: ${definition.name}`
+    });
+
+    assertRoleAssignable(guild, created);
+    return created;
+  })().finally(() => {
+    preferenceRoleCreation.delete(creationKey);
+  });
+
+  preferenceRoleCreation.set(creationKey, creation);
   return creation;
 }
 

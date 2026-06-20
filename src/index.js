@@ -73,6 +73,7 @@ import {
   assertRoleAssignable,
   getMbtiAxis,
   getOrCreateMbtiRole,
+  getOrCreatePreferenceRole,
   getOrCreateReligionRole,
   getOrCreateVoiceActiveRole,
   getOrCreateVerifiedRole,
@@ -127,6 +128,7 @@ startHealthServer(client);
 const customIds = {
   verifyGuide: 'verify:start',
   inquiryGuide: 'inquiry:start',
+  preferenceRolePrefix: 'preference-role:',
   ticketApprove: 'ticket:approve',
   ticketClose: 'ticket:close',
   religionSelect: 'religion:select',
@@ -399,6 +401,35 @@ function buildInquiryPanelPayload() {
   return {
     embeds: [embed],
     components: [inquiryRow]
+  };
+}
+
+function buildPreferenceRolePanelPayload() {
+  const embed = new EmbedBuilder()
+    .setTitle('취향 역할 선택')
+    .setDescription([
+      '원하는 역할을 고르라 듀!',
+      '하나만 골라도 되고, 두 버튼을 모두 눌러 둘 다 가져가도 된다 듀.',
+      '이미 가진 역할의 버튼을 다시 누르면 역할이 해제된다 듀.'
+    ].join('\n'))
+    .setColor(0xeb459e);
+
+  const roleRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${customIds.preferenceRolePrefix}nsfw`)
+      .setLabel('NSFW 역할 받기')
+      .setEmoji('🔞')
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`${customIds.preferenceRolePrefix}menhera`)
+      .setLabel('멘헤라 역할 받기')
+      .setEmoji('🖤')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  return {
+    embeds: [embed],
+    components: [roleRow]
   };
 }
 
@@ -1304,12 +1335,54 @@ async function handleInquiryPanel(interaction) {
   await interaction.editReply(`${targetChannel} 채널에 문의 티켓 패널을 보냈습니다.`);
 }
 
+async function handlePreferenceRolePanel(interaction) {
+  if (!(await assertCanCreatePanel(interaction, '취향 역할 패널 생성은 서버 관리 권한이 필요합니다.'))) return;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetChannel = await getPanelTargetChannel(interaction);
+  await Promise.all([
+    getOrCreatePreferenceRole(interaction.guild, 'nsfw'),
+    getOrCreatePreferenceRole(interaction.guild, 'menhera')
+  ]);
+
+  await targetChannel.send(buildPreferenceRolePanelPayload());
+  await interaction.editReply(`${targetChannel} 채널에 NSFW·멘헤라 역할 선택 패널을 보냈습니다.`);
+}
+
 async function handleVerifyGuide(interaction) {
   await createVerificationTicket(interaction);
 }
 
 async function handleInquiryGuide(interaction) {
   await createInquiryTicket(interaction);
+}
+
+async function handlePreferenceRoleButton(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있다 듀.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const roleKey = interaction.customId.slice(customIds.preferenceRolePrefix.length);
+  if (!['nsfw', 'menhera'].includes(roleKey)) {
+    await interaction.editReply('알 수 없는 역할 버튼이다 듀.');
+    return;
+  }
+
+  const member = await fetchMember(interaction);
+  const role = await getOrCreatePreferenceRole(interaction.guild, roleKey);
+
+  if (member.roles.cache.has(role.id)) {
+    await member.roles.remove(role, `취향 역할 해제: ${interaction.user.tag}`);
+    await interaction.editReply(`**${role.name}** 역할을 내려놨다 듀!`);
+    return;
+  }
+
+  await member.roles.add(role, `취향 역할 선택: ${interaction.user.tag}`);
+  await interaction.editReply(`**${role.name}** 역할을 가져갔다 듀!`);
 }
 
 function formatMbtiStatus(member) {
@@ -2722,6 +2795,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
+      if (interaction.customId.startsWith(customIds.preferenceRolePrefix)) {
+        await handlePreferenceRoleButton(interaction);
+        return;
+      }
+
       if (interaction.customId === customIds.ticketApprove) {
         await handleTicketApprove(interaction);
         return;
@@ -2802,6 +2880,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.inquiryPanel) {
       await handleInquiryPanel(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.preferenceRolePanel) {
+      await handlePreferenceRolePanel(interaction);
       return;
     }
 

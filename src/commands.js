@@ -12,6 +12,7 @@ export const commandNames = {
   verifyPanel: '인증패널',
   inquiryPanel: '문의패널',
   religionPanel: '종교패널',
+  preferenceRolePanel: '취향역할패널',
   mbti: 'mbti',
   addEmoji: '이모지추가',
   attendance: '출석체크',
@@ -114,6 +115,17 @@ export function buildCommands() {
         option
           .setName('채널')
           .setDescription('종교 역할 패널을 보낼 채널')
+          .setRequired(false)
+          .addChannelTypes(ChannelType.GuildText)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.preferenceRolePanel)
+      .setDescription('NSFW·멘헤라 역할을 선택할 수 있는 UI 패널을 보냅니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName('채널')
+          .setDescription('취향 역할 패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
       ),
