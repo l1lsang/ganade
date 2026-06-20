@@ -49,6 +49,7 @@ import {
   getNextGanadiAffectionGoal
 } from './ganadi-affection.js';
 import { generateGanadiReply, shouldRespondToGanadi } from './ganadi-chat.js';
+import { getRandomGanadiPhoto } from './ganadi-photo.js';
 import { startHealthServer } from './health-server.js';
 import {
   checkpointVoiceSessions,
@@ -81,10 +82,12 @@ import {
   addWarning,
   addWarningBanRecord,
   buildWarningHistoryText,
+  getWarningConfig,
   getWarningHistory,
   getWarningSummary,
   removeWarnings,
-  setWarningBanThreshold
+  setWarningBanThreshold,
+  setWarningLogChannel
 } from './warnings.js';
 
 assertRequiredConfig();
@@ -1496,6 +1499,72 @@ function buildWarningEmbed(targetUser, result, title, color) {
     .setTimestamp();
 }
 
+async function sendWarningLog(interaction, {
+  type,
+  targetUser,
+  reason,
+  result
+}) {
+  const warningConfig = await getWarningConfig(interaction.guildId);
+  if (!warningConfig.logChannelId) return false;
+
+  const channel = interaction.guild.channels.cache.get(warningConfig.logChannelId)
+    || await interaction.guild.channels.fetch(warningConfig.logChannelId).catch(() => null);
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    console.warn(`설정된 경고 로그 채널을 찾을 수 없습니다 (${interaction.guildId}/${warningConfig.logChannelId}).`);
+    return false;
+  }
+
+  const isIssue = type === 'issue';
+  const embed = new EmbedBuilder()
+    .setColor(isIssue ? 0xfee75c : 0x57f287)
+    .setTitle(isIssue ? '⚠️ 경고 지급 로그' : '✅ 경고 회수 로그')
+    .setThumbnail(targetUser.displayAvatarURL({ extension: 'png', size: 256 }))
+    .addFields(
+      {
+        name: isIssue ? '경고한 사람' : '경고를 회수한 사람',
+        value: `${interaction.user} (${interaction.user.tag || interaction.user.username})`,
+        inline: false
+      },
+      {
+        name: '경고 받은 사람',
+        value: `${targetUser} (${targetUser.tag || targetUser.username})`,
+        inline: false
+      },
+      {
+        name: '경고 사유',
+        value: reason,
+        inline: false
+      },
+      {
+        name: '현재 경고',
+        value: `${result.activeCount}/${result.threshold}회`,
+        inline: true
+      },
+      {
+        name: isIssue ? '누적 지급' : '이번 회수',
+        value: isIssue ? `${result.totalIssued}회` : `${result.removedAmount}회`,
+        inline: true
+      }
+    )
+    .setFooter({ text: `처리자 ID: ${interaction.user.id} · 대상 ID: ${targetUser.id}` })
+    .setTimestamp();
+
+  if (isIssue && result.shouldBan) {
+    embed.addFields({
+      name: '자동 조치',
+      value: `경고 ${result.threshold}회 기준에 도달해 자동 영구 밴을 진행합니다.`,
+      inline: false
+    });
+  }
+
+  await channel.send({
+    embeds: [embed],
+    allowedMentions: { users: [], roles: [] }
+  });
+  return true;
+}
+
 async function handleWarningIssue(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -1519,6 +1588,15 @@ async function handleWarningIssue(interaction) {
       value: reason,
       inline: false
     });
+
+  await sendWarningLog(interaction, {
+    type: 'issue',
+    targetUser,
+    reason,
+    result
+  }).catch((error) => {
+    console.error(`경고 지급 로그 전송 실패 (${interaction.guildId}): ${error.message}`);
+  });
 
   if (!result.shouldBan) {
     await interaction.editReply({ embeds: [embed] });
@@ -1569,6 +1647,15 @@ async function handleWarningRemove(interaction) {
       }
     );
 
+  await sendWarningLog(interaction, {
+    type: 'remove',
+    targetUser,
+    reason,
+    result
+  }).catch((error) => {
+    console.error(`경고 회수 로그 전송 실패 (${interaction.guildId}): ${error.message}`);
+  });
+
   await interaction.editReply({ embeds: [embed] });
 }
 
@@ -1599,6 +1686,32 @@ async function handleWarningSettings(interaction) {
   await interaction.editReply(`경고 자동 영구 밴 기준을 ${result.threshold}회로 설정했습니다.`);
 }
 
+async function handleWarningLogChannel(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const channel = interaction.options.getChannel('채널', true);
+  const permissions = channel.permissionsFor(interaction.guild.members.me);
+  const required = [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.EmbedLinks
+  ];
+  if (!permissions?.has(required)) {
+    throw new Error(`봇이 ${channel} 채널에서 채널 보기, 메시지 보내기, 링크 첨부 권한을 가져야 합니다.`);
+  }
+
+  await setWarningLogChannel(interaction.guildId, interaction.user.id, channel.id);
+  await interaction.editReply({
+    content: `${channel} 채널을 경고 로그 채널로 설정했습니다.`,
+    allowedMentions: { parse: [] }
+  });
+}
+
+async function handleWarningLogDisable(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  await setWarningLogChannel(interaction.guildId, interaction.user.id, null);
+  await interaction.editReply('경고 로그 채널 설정을 해제했습니다.');
+}
+
 async function handleWarning(interaction) {
   if (!(await assertWarningCommand(interaction))) return;
 
@@ -1621,6 +1734,16 @@ async function handleWarning(interaction) {
 
   if (subcommand === '설정') {
     await handleWarningSettings(interaction);
+    return;
+  }
+
+  if (subcommand === '로그채널') {
+    await handleWarningLogChannel(interaction);
+    return;
+  }
+
+  if (subcommand === '로그해제') {
+    await handleWarningLogDisable(interaction);
     return;
   }
 
@@ -2106,6 +2229,22 @@ async function handleGanadiCommand(interaction) {
 
   await interaction.deferReply();
   const subcommand = interaction.options.getSubcommand();
+
+  if (subcommand === '사진') {
+    const photo = await getRandomGanadiPhoto();
+    if (!photo) {
+      await interaction.editReply('아직 보여 줄 가나디 사진이 없어듀! `src/ㄱㄴㄷ` 폴더에 이미지를 넣어 줘.');
+      return;
+    }
+
+    await interaction.editReply({
+      content: '가나디 사진 한 장 투척한다듀! 🐶📸',
+      files: [new AttachmentBuilder(photo.path, { name: photo.name })],
+      allowedMentions: { parse: [] }
+    });
+    return;
+  }
+
   if (subcommand !== '호감도') {
     await interaction.editReply('지원하지 않는 가나디 명령입니다.');
     return;

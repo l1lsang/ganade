@@ -532,6 +532,11 @@ export function buildBirthdayAnnouncementPayload(member, birthday) {
   };
 }
 
+export async function fetchBirthdayGuildMember(guild, userId) {
+  const member = await guild.members.fetch(userId).catch(() => null);
+  return member && !member.user.bot ? member : null;
+}
+
 export async function runBirthdaySchedulerTick(client, schedulerConfig = {}, now = new Date()) {
   if (!isBirthdayAnnouncementDue(now, schedulerConfig.announcementTime)) return [];
 
@@ -554,8 +559,8 @@ export async function runBirthdaySchedulerTick(client, schedulerConfig = {}, now
           continue;
         }
 
-        const member = await guild.members.fetch(birthday.userId).catch(() => null);
-        if (!member || member.user.bot) continue;
+        const member = await fetchBirthdayGuildMember(guild, birthday.userId);
+        if (!member) continue;
 
         const message = await channel.send(buildBirthdayAnnouncementPayload(member, birthday));
         deliveredAnnouncements.add(deliveryKey);

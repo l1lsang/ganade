@@ -78,6 +78,23 @@ test('등록 버튼 UI와 실제 유저 멘션이 포함된 축하 임베드를 
   assert.deepEqual(payload.allowedMentions.users, ['123456789012345678']);
 });
 
+test('생일자가 서버 명단에 없거나 봇이면 축하 대상에서 제외한다', async () => {
+  const missingGuild = {
+    members: { fetch: async () => { throw new Error('Unknown Member'); } }
+  };
+  const botGuild = {
+    members: { fetch: async () => ({ user: { bot: true } }) }
+  };
+  const member = { id: 'user-1', user: { bot: false } };
+  const activeGuild = {
+    members: { fetch: async () => member }
+  };
+
+  assert.equal(await birthday.fetchBirthdayGuildMember(missingGuild, 'gone-user'), null);
+  assert.equal(await birthday.fetchBirthdayGuildMember(botGuild, 'bot-user'), null);
+  assert.equal(await birthday.fetchBirthdayGuildMember(activeGuild, 'user-1'), member);
+});
+
 test('/생일 명령어에 설정·해제·상태 하위 명령이 있다', async () => {
   const { buildCommands, commandNames } = await import('../src/commands.js');
   const command = buildCommands().find((entry) => entry.name === commandNames.birthday);

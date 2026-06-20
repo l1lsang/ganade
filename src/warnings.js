@@ -1,7 +1,8 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const warningsPath = path.join(process.cwd(), 'data', 'warnings.json');
+const warningsPath = process.env.WARNING_DATA_PATH
+  || path.join(process.cwd(), 'data', 'warnings.json');
 const defaultBanThreshold = 3;
 
 let warningsCache = null;
@@ -36,7 +37,8 @@ function createRecordId(now = new Date()) {
 function getDefaultGuildWarnings() {
   return {
     config: {
-      banThreshold: defaultBanThreshold
+      banThreshold: defaultBanThreshold,
+      logChannelId: null
     },
     users: {},
     events: []
@@ -219,6 +221,33 @@ export async function setWarningBanThreshold(guildId, moderatorId, threshold) {
   return result;
 }
 
+export async function setWarningLogChannel(guildId, moderatorId, channelId) {
+  const nextChannelId = String(channelId || '').trim() || null;
+  let result = null;
+
+  await updateGuildWarnings(guildId, (guildWarnings) => {
+    const event = createWarningEvent('config', {
+      moderatorId,
+      reason: nextChannelId
+        ? `경고 로그 채널 ${nextChannelId}(으)로 설정`
+        : '경고 로그 채널 설정 해제',
+      logChannelId: nextChannelId
+    });
+
+    result = { event, logChannelId: nextChannelId };
+    return {
+      ...guildWarnings,
+      config: {
+        ...guildWarnings.config,
+        logChannelId: nextChannelId
+      },
+      events: [...guildWarnings.events, event]
+    };
+  });
+
+  return result;
+}
+
 export async function addWarningBanRecord(guildId, userId, moderatorId, reason, threshold) {
   await updateGuildWarnings(guildId, (guildWarnings) => {
     const event = createWarningEvent('ban', {
@@ -289,6 +318,7 @@ export function buildWarningHistoryText(guild, history, user = null) {
     `서버: ${guild.name} (${guild.id})`,
     `대상: ${user ? `${user.tag || user.username} (${user.id})` : '전체 유저'}`,
     `자동 밴 기준: ${history.config.banThreshold}회`,
+    `경고 로그 채널: ${history.config.logChannelId || '설정 안 됨'}`,
     `생성 시각: ${new Date().toISOString()}`,
     '',
     '현재 경고 요약'

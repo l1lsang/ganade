@@ -229,6 +229,23 @@ export function buildCommands() {
               .setMinValue(1)
               .setMaxValue(100)
           )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('로그채널')
+          .setDescription('경고 지급·회수 로그를 보낼 채널을 설정합니다.')
+          .addChannelOption((option) =>
+            option
+              .setName('채널')
+              .setDescription('경고 처리 내역을 기록할 채널')
+              .setRequired(true)
+              .addChannelTypes(ChannelType.GuildText)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('로그해제')
+          .setDescription('경고 로그 채널 설정을 해제합니다.')
       ),
     new SlashCommandBuilder()
       .setName(commandNames.anonymous)
@@ -360,6 +377,11 @@ export function buildCommands() {
               .setDescription('호감도를 확인할 멤버, 비워두면 본인')
               .setRequired(false)
           )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('사진')
+          .setDescription('가나디 사진 중 한 장을 무작위로 보여 줍니다.')
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)
