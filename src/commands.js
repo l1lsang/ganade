@@ -5,10 +5,12 @@ import { buildEconomyCommands } from './economy-commands.js';
 export const commandNames = {
   update: '업데이트',
   verify: '인증',
+  inquiry: '문의',
   religion: '종교선택',
   settings: '설정',
   panel: '패널',
   verifyPanel: '인증패널',
+  inquiryPanel: '문의패널',
   religionPanel: '종교패널',
   mbti: 'mbti',
   addEmoji: '이모지추가',
@@ -50,7 +52,7 @@ export function buildCommands() {
     buildUpdateCommand(),
     new SlashCommandBuilder()
       .setName(commandNames.settings)
-      .setDescription('인증 역할, 관리자 역할, 인증 로그 채널을 설정합니다.')
+      .setDescription('인증 역할, 티켓 관리자 역할, 인증 로그 채널을 설정합니다.')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addRoleOption((option) =>
         option
@@ -61,7 +63,7 @@ export function buildCommands() {
       .addRoleOption((option) =>
         option
           .setName('관리자역할')
-          .setDescription('인증 티켓을 확인할 관리자 역할')
+          .setDescription('인증·문의 티켓을 확인할 관리자 역할')
           .setRequired(false)
       )
       .addChannelOption((option) =>
@@ -73,7 +75,7 @@ export function buildCommands() {
       ),
     new SlashCommandBuilder()
       .setName(commandNames.panel)
-      .setDescription('인증 패널과 종교 역할 패널을 따로 보냅니다.')
+      .setDescription('인증·문의 티켓과 종교 역할 패널을 따로 보냅니다.')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addChannelOption((option) =>
         option
@@ -90,6 +92,17 @@ export function buildCommands() {
         option
           .setName('채널')
           .setDescription('인증 패널을 보낼 채널')
+          .setRequired(false)
+          .addChannelTypes(ChannelType.GuildText)
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.inquiryPanel)
+      .setDescription('문의 티켓 전용 UI 패널을 보냅니다.')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+      .addChannelOption((option) =>
+        option
+          .setName('채널')
+          .setDescription('문의 패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
       ),
@@ -436,6 +449,9 @@ export function buildCommands() {
     new SlashCommandBuilder()
       .setName(commandNames.ping)
       .setDescription('봇 응답 상태를 확인합니다.'),
+    new SlashCommandBuilder()
+      .setName(commandNames.inquiry)
+      .setDescription('관리자와 이야기할 수 있는 문의 티켓을 생성합니다.'),
     new SlashCommandBuilder()
       .setName(commandNames.verify)
       .setDescription('수동 인증 티켓을 생성합니다.'),

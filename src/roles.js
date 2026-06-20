@@ -8,6 +8,9 @@ export const mbtiAxes = [
   ['J', 'P']
 ];
 
+export const voiceActiveRoleName = '🔊 음성채팅 중';
+const voiceActiveRoleCreation = new Map();
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -39,6 +42,50 @@ export function assertRoleAssignable(guild, role) {
 function findRoleByName(guild, name) {
   const normalized = name.toLocaleLowerCase('ko-KR');
   return guild.roles.cache.find((role) => role.name.toLocaleLowerCase('ko-KR') === normalized) || null;
+}
+
+export async function getVoiceActiveRole(guild) {
+  await guild.roles.fetch();
+
+  const role = findRoleByName(guild, voiceActiveRoleName);
+  if (role) assertRoleAssignable(guild, role);
+  return role;
+}
+
+export async function getOrCreateVoiceActiveRole(guild) {
+  const existing = await getVoiceActiveRole(guild);
+  if (existing) {
+    if (guild.features.includes('ROLE_ICONS') && !existing.icon && !existing.unicodeEmoji) {
+      assertCanManageRoles(guild);
+      return existing.setUnicodeEmoji('🔊', '음성방 표시 역할 아이콘 설정');
+    }
+
+    return existing;
+  }
+
+  const pending = voiceActiveRoleCreation.get(guild.id);
+  if (pending) return pending;
+
+  const creation = (async () => {
+    assertCanManageRoles(guild);
+    const supportsRoleIcons = guild.features.includes('ROLE_ICONS');
+    const created = await guild.roles.create({
+      name: voiceActiveRoleName,
+      colors: { primaryColor: 0 },
+      mentionable: false,
+      permissions: [],
+      ...(supportsRoleIcons ? { unicodeEmoji: '🔊' } : {}),
+      reason: '음성방 접속 표시 역할 자동 생성'
+    });
+
+    assertRoleAssignable(guild, created);
+    return created;
+  })().finally(() => {
+    voiceActiveRoleCreation.delete(guild.id);
+  });
+
+  voiceActiveRoleCreation.set(guild.id, creation);
+  return creation;
 }
 
 export async function getOrCreateVerifiedRole(guild, guildSettings = {}) {
