@@ -24,6 +24,7 @@ export const commandNames = {
   bibleMessage: '성경말씀',
   birthday: '생일',
   ganadi: '가나디',
+  welcome: '환영',
   level: '레벨',
   levelRanking: '랭킹',
   clean: '청소',
@@ -466,6 +467,23 @@ export function buildCommands() {
         subcommand
           .setName('채널상태')
           .setDescription('현재 가나디 전용 대화 채널을 확인합니다.')
+      ),
+    new SlashCommandBuilder()
+      .setName(commandNames.welcome)
+      .setDescription('멤버에게 따뜻한 환영 글을 보냅니다.')
+      .addUserOption((option) =>
+        option
+          .setName('멤버')
+          .setDescription('환영할 서버 멤버')
+          .setRequired(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('글')
+          .setDescription('직접 전할 환영 글, 비워두면 기본 환영 글 사용')
+          .setRequired(false)
+          .setMinLength(1)
+          .setMaxLength(1000)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.level)

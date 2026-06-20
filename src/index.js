@@ -105,6 +105,7 @@ import {
   setWarningBanThreshold,
   setWarningLogChannel
 } from './warnings.js';
+import { buildWelcomePayload } from './welcome.js';
 
 assertRequiredConfig();
 await assertDataStorageReady();
@@ -2483,6 +2484,40 @@ async function handleSelfIntroduction(interaction) {
   );
 }
 
+async function handleWelcome(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  const targetUser = interaction.options.getUser('멤버', true);
+  const targetMember = interaction.options.getMember('멤버');
+
+  if (!targetMember) {
+    await interaction.reply({ content: '현재 서버에 있는 멤버만 환영할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  if (targetUser.bot) {
+    await interaction.reply({ content: '봇이 아닌 서버 멤버를 선택해 주세요.', ephemeral: true });
+    return;
+  }
+
+  const message = interaction.options.getString('글');
+  const targetDisplayName = targetMember.displayName || targetUser.globalName || targetUser.username;
+  const welcomerName = interaction.member?.displayName
+    || interaction.user.globalName
+    || interaction.user.username;
+
+  await interaction.reply(buildWelcomePayload({
+    guildName: interaction.guild.name,
+    targetUser,
+    targetDisplayName,
+    welcomerName,
+    message
+  }));
+}
+
 async function handleBibleMessage(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
@@ -3010,6 +3045,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.ganadi) {
       await handleGanadiCommand(interaction);
+      return;
+    }
+
+    if (interaction.commandName === commandNames.welcome) {
+      await handleWelcome(interaction);
       return;
     }
 
