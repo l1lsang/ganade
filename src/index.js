@@ -433,7 +433,7 @@ function buildPreferenceRolePanelPayload(nsfwRoleId, menheraRoleId) {
     new ButtonBuilder()
       .setCustomId(`${customIds.preferenceRolePrefix}menhera:${menheraRoleId}`)
       .setLabel('멘헤라 역할 받기')
-      .setEmoji('🖤')
+      .setEmoji('❤️‍🩹')
       .setStyle(ButtonStyle.Secondary)
   );
 
