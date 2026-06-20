@@ -55,6 +55,7 @@ test('날짜와 서버가 같으면 같은 하루 한 번 구절을 선택한다
   const second = selectDailyBibleVerse('2026-06-21', 'guild-1');
   assert.deepEqual(first, second);
   assert.match(first.reference, /\d/);
+  assert.ok(first.text.length > 10);
   assert.ok(first.theme.length > 10);
   assert.ok(first.fallback.length > 10);
 });
@@ -103,11 +104,15 @@ test('OpenAI 안부를 정리하고 @everyone 허용 메시지를 만든다', as
   assert.equal(request.model, 'test-model');
   assert.equal(request.instructions, scheduledGreetingPrompt);
   assert.match(request.input, /오늘 한 번 포함할 성경 구절/);
+  assert.match(request.input, new RegExp(verse.text.split('\n')[0]));
+  assert.match(request.input, /따뜻한 덕담/);
 
   const payload = buildScheduledGreetingPayload(slot, greeting, verse);
   assert.equal(payload.content, '@everyone');
   assert.deepEqual(payload.allowedMentions, { parse: ['everyone'] });
   assert.match(payload.embeds[0].toJSON().description, new RegExp(verse.reference));
+  assert.match(payload.embeds[0].toJSON().description, new RegExp(verse.text.split('\n')[0]));
+  assert.match(payload.embeds[0].toJSON().description, /가나디의 덕담/);
 
   const lunchPayload = buildScheduledGreetingPayload({
     ...slot,
