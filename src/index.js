@@ -145,6 +145,20 @@ const customIds = {
   levelRankingPrefix: 'level-ranking:'
 };
 
+const manualVerificationGuide = [
+  '2010년생 이상 (만 15세 생일 지난 사람만 가능)',
+  '',
+  '음성 채팅 출석, 채팅 활동 등을 통해 레벨 5 이상 달성한 유저만 인증 가능',
+  '',
+  '인증 방법',
+  '',
+  '학생증 / 청소년증 / 민증 등 (생년월일 제외 개인정보 가리기)',
+  '',
+  '종이에 ‘돌아갈래’를 직접 적은 메모지와 함께 찍어서 티켓에 첨부',
+  '',
+  '레벨 5 달성 화면이 보이도록 레벨 봇 프로필 또는 레벨 확인 창을 캡처한 스크린샷도 함께 첨부'
+].join('\n');
+
 const inviteCache = new Map();
 const ganadiCooldowns = new Map();
 const ganadiResponseQueues = new Map();
@@ -366,17 +380,7 @@ async function handleAddEmoji(interaction) {
 function buildVerifyPanelPayload() {
   const embed = new EmbedBuilder()
     .setTitle('수동 인증 티켓')
-    .setDescription([
-      '**인증 조건**',
-      '2010년생 이상 (만 15세 생일 지난 사람만 가능)',
-      '',
-      '**인증 방법**',
-      '학생증 / 청소년증 / 민증 등 (생년월일 제외 개인정보 가리기)',
-      "종이에 '돌아갈래'를 직접 적은 메모지와 함께 찍어서 티켓에 첨부",
-      '',
-      '**티켓 주의사항**',
-      '장난이나 허위 인증, 혹은 조건이 안 되는데 티켓을 함부로 열 경우 [경고 1회 처리]'
-    ].join('\n'))
+    .setDescription(manualVerificationGuide)
     .setColor(0x57f287);
 
   const verifyRow = new ActionRowBuilder().addComponents(
@@ -941,11 +945,7 @@ async function createVerificationTicket(interaction) {
 
   const embed = new EmbedBuilder()
     .setTitle('인증 티켓')
-    .setDescription([
-      `${interaction.user} 님, 이 채널에 신분증 또는 학생증 사진을 올려 주세요.`,
-      '관리자가 수동으로 확인한 뒤 인증 승인 버튼을 누르면 인증 역할이 지급됩니다.',
-      '인증이 끝났거나 취소하려면 티켓 닫기 버튼을 누르세요.'
-    ].join('\n'))
+    .setDescription(manualVerificationGuide)
     .setColor(0x57f287);
 
   await channel.send({
