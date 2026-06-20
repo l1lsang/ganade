@@ -1137,38 +1137,14 @@ async function applyReligionRole(interaction, rawName) {
   const religionName = sanitizeReligionName(rawName);
   const role = await getOrCreateReligionRole(interaction.guild, religionName);
   const member = await fetchMember(interaction);
-  const extraRole = await getReligionExtraRole(interaction.guild);
 
   await replaceReligionRole(member, role);
-  if (extraRole && extraRole.id !== role.id && !member.roles.cache.has(extraRole.id)) {
-    await member.roles.add(extraRole, `종교 역할 선택 보조 역할: ${member.user.tag}`);
-  }
 
-  return {
-    role,
-    extraRole
-  };
+  return { role };
 }
 
-async function getReligionExtraRole(guild) {
-  if (!config.religionExtraRoleId) return null;
-
-  const role = await guild.roles.fetch(config.religionExtraRoleId);
-  if (!role) {
-    throw new Error(`종교 보조 역할을 찾을 수 없습니다: ${config.religionExtraRoleId}`);
-  }
-
-  assertRoleAssignable(guild, role);
-  return role;
-}
-
-function formatReligionRoleReply({ role, extraRole }) {
-  const roles = [`"${role.name}"`];
-  if (extraRole && extraRole.id !== role.id) {
-    roles.push(`"${extraRole.name}"`);
-  }
-
-  return `${roles.join(', ')} 역할을 지급했습니다.`;
+function formatReligionRoleReply({ role }) {
+  return `"${role.name}" 역할을 지급했습니다.`;
 }
 
 async function handleReligionSelect(interaction) {

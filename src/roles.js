@@ -58,15 +58,29 @@ export async function getVoiceActiveRole(guild) {
   return role;
 }
 
+async function ensureVoiceActiveRoleDisplay(guild, role) {
+  let updatedRole = role;
+
+  if (guild.features.includes('ROLE_ICONS') && !updatedRole.icon && !updatedRole.unicodeEmoji) {
+    assertCanManageRoles(guild);
+    updatedRole = await updatedRole.setUnicodeEmoji('🔊', '음성방 표시 역할 아이콘 설정');
+  }
+
+  const highestManageablePosition = guild.members.me.roles.highest.position - 1;
+  if (highestManageablePosition > updatedRole.position) {
+    assertCanManageRoles(guild);
+    updatedRole = await updatedRole.setPosition(highestManageablePosition, {
+      reason: '음성방 표시 역할 아이콘 우선순위 설정'
+    });
+  }
+
+  return updatedRole;
+}
+
 export async function getOrCreateVoiceActiveRole(guild) {
   const existing = await getVoiceActiveRole(guild);
   if (existing) {
-    if (guild.features.includes('ROLE_ICONS') && !existing.icon && !existing.unicodeEmoji) {
-      assertCanManageRoles(guild);
-      return existing.setUnicodeEmoji('🔊', '음성방 표시 역할 아이콘 설정');
-    }
-
-    return existing;
+    return ensureVoiceActiveRoleDisplay(guild, existing);
   }
 
   const pending = voiceActiveRoleCreation.get(guild.id);
@@ -85,7 +99,7 @@ export async function getOrCreateVoiceActiveRole(guild) {
     });
 
     assertRoleAssignable(guild, created);
-    return created;
+    return ensureVoiceActiveRoleDisplay(guild, created);
   })().finally(() => {
     voiceActiveRoleCreation.delete(guild.id);
   });
