@@ -100,6 +100,16 @@ test('/생일 명령어에 설정·해제·상태 하위 명령이 있다', asyn
   const command = buildCommands().find((entry) => entry.name === commandNames.birthday);
   assert.ok(command);
   assert.deepEqual(command.options.map((option) => option.name), ['설정', '해제', '상태']);
-  assert.equal(command.options[0].options[0].name, '채널');
-  assert.equal(command.options[0].options[0].required, false);
+  assert.deepEqual(command.options[0].options.map((option) => option.name), ['채널', '축하채널']);
+  assert.ok(command.options[0].options.every((option) => option.required === false));
+});
+
+test('축하 채널을 따로 지정하고 기존 설정은 등록 채널로 호환한다', () => {
+  assert.equal(birthday.getBirthdayAnnouncementChannelId({
+    channelId: 'registration-channel',
+    announcementChannelId: 'announcement-channel'
+  }), 'announcement-channel');
+  assert.equal(birthday.getBirthdayAnnouncementChannelId({
+    channelId: 'legacy-registration-channel'
+  }), 'legacy-registration-channel');
 });

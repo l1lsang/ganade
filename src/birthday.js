@@ -282,6 +282,22 @@ function assertBirthdayChannelPermissions(guild, channel) {
   }
 }
 
+function assertBirthdayAnnouncementPermissions(guild, channel) {
+  const permissions = channel.permissionsFor(guild.members.me);
+  const required = [
+    PermissionsBitField.Flags.ViewChannel,
+    PermissionsBitField.Flags.SendMessages,
+    PermissionsBitField.Flags.EmbedLinks
+  ];
+  if (!permissions?.has(required)) {
+    throw new Error(`봇이 ${channel} 축하 채널에서 채널 보기, 메시지 보내기, 링크 첨부 권한을 가져야 합니다.`);
+  }
+}
+
+export function getBirthdayAnnouncementChannelId(settings = {}) {
+  return settings.announcementChannelId || settings.channelId || null;
+}
+
 async function createBirthdayRegistrationChannel(guild, parentId = null) {
   if (!guild.members.me.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
     throw new Error('봇에 채널 관리 권한이 없어 생일 등록 채널을 만들 수 없습니다. 기존 채널을 직접 지정해 주세요.');
@@ -406,6 +422,7 @@ export async function handleBirthdayCommand(interaction) {
 
   if (subcommand === '설정') {
     let channel = interaction.options.getChannel('채널');
+    let announcementChannel = interaction.options.getChannel('축하채널');
     let created = false;
 
     if (!channel && current.channelId) {
@@ -419,7 +436,13 @@ export async function handleBirthdayCommand(interaction) {
       created = true;
     }
 
+    if (!announcementChannel && current.announcementChannelId) {
+      announcementChannel = await getBirthdayChannel(interaction.guild, current.announcementChannelId);
+    }
+    if (!announcementChannel) announcementChannel = channel;
+
     assertBirthdayChannelPermissions(interaction.guild, channel);
+    assertBirthdayAnnouncementPermissions(interaction.guild, announcementChannel);
     const panel = await postOrRefreshBirthdayPanel(
       channel,
       current.channelId === channel.id ? current.panelMessageId : null
@@ -432,14 +455,18 @@ export async function handleBirthdayCommand(interaction) {
         ...current,
         enabled: true,
         channelId: channel.id,
+        announcementChannelId: announcementChannel.id,
         panelMessageId: panel.id
       }
     });
 
     await interaction.editReply({
-      content: created
-        ? `${channel} 생일 등록 채널을 만들고 Discord UI를 게시했어듀! 생일 축하도 이 채널로 보낼게.`
-        : `${channel} 채널에 생일 등록 UI를 준비했어듀! 생일 축하도 이 채널로 보낼게.`,
+      content: [
+        created
+          ? `${channel} 생일 등록 채널을 만들고 Discord UI를 게시했어듀!`
+          : `${channel} 채널에 생일 등록 UI를 준비했어듀!`,
+        `생일 축하 메시지는 ${announcementChannel} 채널로 보낼게.`
+      ].join('\n'),
       allowedMentions: { parse: [] }
     });
     return;
@@ -459,7 +486,8 @@ export async function handleBirthdayCommand(interaction) {
     await interaction.editReply({
       content: [
         `사용 여부: ${current.enabled ? '사용 중' : '사용 안 함'}`,
-        `등록·축하 채널: ${current.channelId ? `<#${current.channelId}>` : '설정 안 됨'}`,
+        `등록 채널: ${current.channelId ? `<#${current.channelId}>` : '설정 안 됨'}`,
+        `축하 채널: ${getBirthdayAnnouncementChannelId(current) ? `<#${getBirthdayAnnouncementChannelId(current)}>` : '설정 안 됨'}`,
         `등록 인원: ${count.toLocaleString('ko-KR')}명`,
         '축하 시각: 한국 시간 오전 9시 이후'
       ].join('\n'),
@@ -548,9 +576,10 @@ export async function runBirthdaySchedulerTick(client, schedulerConfig = {}, now
       const birthdaySettings = settings.birthday;
       if (!birthdaySettings?.enabled || !birthdaySettings.channelId) continue;
 
-      const channel = await getBirthdayChannel(guild, birthdaySettings.channelId);
-      if (!channel) throw new Error('설정된 생일 채널을 찾을 수 없습니다.');
-      assertBirthdayChannelPermissions(guild, channel);
+      const announcementChannelId = getBirthdayAnnouncementChannelId(birthdaySettings);
+      const channel = await getBirthdayChannel(guild, announcementChannelId);
+      if (!channel) throw new Error('설정된 생일 축하 채널을 찾을 수 없습니다.');
+      assertBirthdayAnnouncementPermissions(guild, channel);
 
       const birthdays = await getBirthdaysForDate(guild.id, koreanTime.month, koreanTime.day);
       for (const birthday of birthdays) {

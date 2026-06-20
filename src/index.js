@@ -42,6 +42,13 @@ import {
 import { commandNames } from './commands.js';
 import { assertRequiredConfig, config } from './config.js';
 import {
+  buildEconomyRankingReply,
+  handleEconomyCommand,
+  isEconomyCommand
+} from './economy-commands.js';
+import { awardAttendanceEconomy } from './economy.js';
+import { formatDuc } from './economy-catalog.js';
+import {
   addGanadiAffection,
   buildGanadiAffectionBar,
   getGanadiAffection,
@@ -1153,7 +1160,7 @@ function getAttendanceDisplayName(interaction) {
   return interaction.member?.displayName || interaction.member?.nick || interaction.user.globalName || interaction.user.username;
 }
 
-function buildAttendanceEmbed(interaction, result) {
+function buildAttendanceEmbed(interaction, result, economyReward = null) {
   const displayName = getAttendanceDisplayName(interaction);
   const description = result.alreadyChecked
     ? [
@@ -1165,7 +1172,7 @@ function buildAttendanceEmbed(interaction, result) {
         `${result.streak}일째 출석!! 듀 가나디가 아주 뿌듯하듀.`
       ];
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle(result.alreadyChecked ? '이미 출석했듀' : '출석 완료했듀')
     .setDescription(description.join('\n'))
     .setColor(result.alreadyChecked ? 0xfee75c : 0x57f287)
@@ -1185,7 +1192,24 @@ function buildAttendanceEmbed(interaction, result) {
         value: `${result.bestStreak}일`,
         inline: true
       }
-    )
+    );
+
+  if (economyReward && !economyReward.alreadyRewarded) {
+    embed.addFields(
+      {
+        name: '오늘의 듀코인 보상',
+        value: `**${formatDuc(economyReward.reward)}**`,
+        inline: true
+      },
+      {
+        name: '듀코인 잔액',
+        value: formatDuc(economyReward.wallet),
+        inline: true
+      }
+    );
+  }
+
+  return embed
     .setFooter({ text: `기준 날짜: ${result.date} (KST)` })
     .setTimestamp();
 }
@@ -1212,8 +1236,18 @@ async function handleAttendanceCheck(interaction) {
   await interaction.deferReply();
 
   const result = await registerAttendance(interaction.guildId, interaction.user.id);
+  const economyReward = await awardAttendanceEconomy(
+    interaction.guildId,
+    interaction.user.id,
+    result,
+    {
+      username: interaction.user.username,
+      displayName: getAttendanceDisplayName(interaction),
+      avatarUrl: interaction.user.displayAvatarURL({ extension: 'png', size: 256 })
+    }
+  );
   await interaction.editReply({
-    embeds: [buildAttendanceEmbed(interaction, result)]
+    embeds: [buildAttendanceEmbed(interaction, result, economyReward)]
   });
 }
 
@@ -1407,6 +1441,10 @@ async function handleLevelRanking(interaction) {
 
   await interaction.deferReply();
   const type = interaction.options.getString('종류') || 'overall';
+  if (type === 'economy') {
+    await interaction.editReply(await buildEconomyRankingReply(interaction.guildId, 'assets'));
+    return;
+  }
   await interaction.editReply(await buildLevelRankingReply(interaction.guildId, type));
 }
 
@@ -2573,6 +2611,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === commandNames.ping) {
       await handlePing(interaction);
+      return;
+    }
+
+    if (isEconomyCommand(interaction.commandName)) {
+      await handleEconomyCommand(interaction);
       return;
     }
 

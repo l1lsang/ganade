@@ -1,5 +1,6 @@
 import { ChannelType, PermissionFlagsBits, SlashCommandBuilder } from 'discord.js';
 import { config } from './config.js';
+import { buildEconomyCommands } from './economy-commands.js';
 
 export const commandNames = {
   update: '업데이트',
@@ -353,6 +354,13 @@ export function buildCommands() {
               .setRequired(false)
               .addChannelTypes(ChannelType.GuildText)
           )
+          .addChannelOption((option) =>
+            option
+              .setName('축하채널')
+              .setDescription('생일 축하 메시지를 보낼 채널, 비우면 등록 채널 사용')
+              .setRequired(false)
+              .addChannelTypes(ChannelType.GuildText)
+          )
       )
       .addSubcommand((subcommand) =>
         subcommand
@@ -403,7 +411,8 @@ export function buildCommands() {
           .addChoices(
             { name: '종합 랭킹', value: 'overall' },
             { name: '채팅 랭킹', value: 'chat' },
-            { name: '음성방 랭킹', value: 'voice' }
+            { name: '음성방 랭킹', value: 'voice' },
+            { name: '듀코인 부자 랭킹', value: 'economy' }
           )
       ),
     new SlashCommandBuilder()
@@ -446,6 +455,7 @@ export function buildCommands() {
           .setDescription('목록에 없는 종교를 입력합니다.')
           .setRequired(false)
           .setMaxLength(30)
-      )
+      ),
+    ...buildEconomyCommands()
   ].map((command) => command.toJSON());
 }
