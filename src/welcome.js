@@ -1,7 +1,7 @@
 import { EmbedBuilder } from 'discord.js';
 
 export const defaultWelcomeMessage =
-  '새로운 인연이 시작됐어요! 이곳에서 즐겁고 따뜻한 추억을 많이 만들어 가길 바라요. 함께하게 되어 정말 반가워요!';
+  '환영한다듀...!!!!';
 
 export function buildWelcomePayload({
   guildName,
