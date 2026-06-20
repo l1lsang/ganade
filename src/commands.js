@@ -128,6 +128,22 @@ export function buildCommands() {
           .setDescription('취향 역할 패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('nsfw역할id')
+          .setDescription('버튼으로 지급할 NSFW 역할 ID, 비우면 자동 생성')
+          .setRequired(false)
+          .setMinLength(17)
+          .setMaxLength(22)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('멘헤라역할id')
+          .setDescription('버튼으로 지급할 멘헤라 역할 ID, 비우면 자동 생성')
+          .setRequired(false)
+          .setMinLength(17)
+          .setMaxLength(22)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.mbti)

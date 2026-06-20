@@ -404,7 +404,7 @@ function buildInquiryPanelPayload() {
   };
 }
 
-function buildPreferenceRolePanelPayload() {
+function buildPreferenceRolePanelPayload(nsfwRoleId, menheraRoleId) {
   const embed = new EmbedBuilder()
     .setTitle('취향 역할 선택')
     .setDescription([
@@ -416,12 +416,12 @@ function buildPreferenceRolePanelPayload() {
 
   const roleRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`${customIds.preferenceRolePrefix}nsfw`)
+      .setCustomId(`${customIds.preferenceRolePrefix}nsfw:${nsfwRoleId}`)
       .setLabel('NSFW 역할 받기')
       .setEmoji('🔞')
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
-      .setCustomId(`${customIds.preferenceRolePrefix}menhera`)
+      .setCustomId(`${customIds.preferenceRolePrefix}menhera:${menheraRoleId}`)
       .setLabel('멘헤라 역할 받기')
       .setEmoji('🖤')
       .setStyle(ButtonStyle.Secondary)
@@ -1335,18 +1335,38 @@ async function handleInquiryPanel(interaction) {
   await interaction.editReply(`${targetChannel} 채널에 문의 티켓 패널을 보냈습니다.`);
 }
 
+async function resolvePreferenceRole(guild, roleKey, rawRoleId) {
+  if (!rawRoleId) return getOrCreatePreferenceRole(guild, roleKey);
+
+  const roleId = rawRoleId.trim();
+  if (!/^\d{17,22}$/.test(roleId)) {
+    throw new Error('역할 ID는 17~22자리 숫자로 입력해 주세요.');
+  }
+
+  const role = await guild.roles.fetch(roleId);
+  if (!role) throw new Error(`서버에서 역할을 찾을 수 없습니다: ${roleId}`);
+  if (role.id === guild.roles.everyone.id) throw new Error('@everyone 역할은 선택 버티에 사용할 수 없습니다.');
+
+  assertRoleAssignable(guild, role);
+  return role;
+}
+
 async function handlePreferenceRolePanel(interaction) {
   if (!(await assertCanCreatePanel(interaction, '취향 역할 패널 생성은 서버 관리 권한이 필요합니다.'))) return;
 
   await interaction.deferReply({ ephemeral: true });
 
   const targetChannel = await getPanelTargetChannel(interaction);
-  await Promise.all([
-    getOrCreatePreferenceRole(interaction.guild, 'nsfw'),
-    getOrCreatePreferenceRole(interaction.guild, 'menhera')
+  const [nsfwRole, menheraRole] = await Promise.all([
+    resolvePreferenceRole(interaction.guild, 'nsfw', interaction.options.getString('nsfw역할id')),
+    resolvePreferenceRole(interaction.guild, 'menhera', interaction.options.getString('멘헤라역할id'))
   ]);
 
-  await targetChannel.send(buildPreferenceRolePanelPayload());
+  if (nsfwRole.id === menheraRole.id) {
+    throw new Error('NSFW와 멘헤라에는 서로 다른 역할 ID를 설정해 주세요.');
+  }
+
+  await targetChannel.send(buildPreferenceRolePanelPayload(nsfwRole.id, menheraRole.id));
   await interaction.editReply(`${targetChannel} 채널에 NSFW·멘헤라 역할 선택 패널을 보냈습니다.`);
 }
 
@@ -1366,14 +1386,16 @@ async function handlePreferenceRoleButton(interaction) {
 
   await interaction.deferReply({ ephemeral: true });
 
-  const roleKey = interaction.customId.slice(customIds.preferenceRolePrefix.length);
+  const [roleKey, configuredRoleId] = interaction.customId
+    .slice(customIds.preferenceRolePrefix.length)
+    .split(':');
   if (!['nsfw', 'menhera'].includes(roleKey)) {
     await interaction.editReply('알 수 없는 역할 버튼이다 듀.');
     return;
   }
 
   const member = await fetchMember(interaction);
-  const role = await getOrCreatePreferenceRole(interaction.guild, roleKey);
+  const role = await resolvePreferenceRole(interaction.guild, roleKey, configuredRoleId);
 
   if (member.roles.cache.has(role.id)) {
     await member.roles.remove(role, `취향 역할 해제: ${interaction.user.tag}`);
