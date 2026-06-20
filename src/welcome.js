@@ -14,7 +14,7 @@ export function buildWelcomePayload({
   const displayName = targetDisplayName || targetUser.globalName || targetUser.username;
 
   const embed = new EmbedBuilder()
-    .setColor(0xffb7d5)
+    .setColor(0xFFFFFF)
     .setTitle(`🎉 ${displayName}님, 환영해요!`)
     .setThumbnail(targetUser.displayAvatarURL({ extension: 'png', size: 256 }))
     .setDescription([
