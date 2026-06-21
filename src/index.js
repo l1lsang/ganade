@@ -10,7 +10,6 @@ import {
   GatewayIntentBits,
   ModalBuilder,
   PermissionsBitField,
-  RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle
@@ -137,7 +136,6 @@ const customIds = {
   inquiryGuide: 'inquiry:start',
   preferenceRolePrefix: 'preference-role:',
   ticketApprove: 'ticket:approve',
-  ticketApproveRole: 'ticket:approve-role',
   ticketClose: 'ticket:close',
   religionSelect: 'religion:select',
   religionCustomButton: 'religion:custom',
@@ -389,15 +387,19 @@ async function handleAddEmoji(interaction) {
   await interaction.editReply(`이모지를 추가했습니다: ${createdEmoji} \`:${createdEmoji.name}:\``);
 }
 
-function buildVerifyPanelPayload() {
+function buildVerifyPanelPayload(verifiedRole) {
   const embed = new EmbedBuilder()
     .setTitle('수동 인증 티켓')
-    .setDescription(manualVerificationGuide)
+    .setDescription([
+      manualVerificationGuide,
+      '',
+      `**승인 시 자동 지급 역할:** <@&${verifiedRole.id}>`
+    ].join('\n'))
     .setColor(0x57f287);
 
   const verifyRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(customIds.verifyGuide)
+      .setCustomId(`${customIds.verifyGuide}:${verifiedRole.id}`)
       .setLabel('인증 티켓 생성')
       .setStyle(ButtonStyle.Primary)
   );
@@ -473,20 +475,6 @@ function buildTicketControls() {
         .setStyle(ButtonStyle.Danger)
     )
   ];
-}
-
-function buildTicketApprovalRoleComponents(defaultRoleId) {
-  const roleSelect = new RoleSelectMenuBuilder()
-    .setCustomId(customIds.ticketApproveRole)
-    .setPlaceholder('인증 승인 시 지급할 역할 선택')
-    .setMinValues(1)
-    .setMaxValues(1);
-
-  if (defaultRoleId) {
-    roleSelect.setDefaultRoles(defaultRoleId);
-  }
-
-  return [new ActionRowBuilder().addComponents(roleSelect)];
 }
 
 function buildInquiryTicketControls() {
@@ -747,11 +735,6 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
   const content = contentParts.filter(Boolean).join(' ');
   const allowedMentions = settings.mentionUser ? { users: [member.id], roles: [] } : { users: [], roles: [] };
   const bannerImageUrl = getMemberLogBannerUrl(member, settings);
-  const bannerEmbed = bannerImageUrl
-    ? new EmbedBuilder()
-        .setColor(parseEmbedColor(settings.embedColor))
-        .setImage(bannerImageUrl)
-    : null;
 
   if (settings.useEmbed === false) {
     const plainLines = [
@@ -768,13 +751,10 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
       plainLines.push(`초대자: ${tokens.inviterMention} (${tokens.inviterName})`);
     }
 
-    const payload = {
+    return {
       content: [content, ...plainLines].filter(Boolean).join('\n'),
       allowedMentions
     };
-
-    if (bannerEmbed) payload.embeds = [bannerEmbed];
-    return payload;
   }
 
   const embed = new EmbedBuilder()
@@ -817,8 +797,12 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
     embed.setThumbnail(member.user.displayAvatarURL({ extension: 'png', size: 256 }));
   }
 
+  if (bannerImageUrl) {
+    embed.setImage(bannerImageUrl);
+  }
+
   const payload = {
-    embeds: bannerEmbed ? [bannerEmbed, embed] : [embed],
+    embeds: [embed],
     allowedMentions
   };
 
@@ -877,7 +861,7 @@ async function findOpenVerificationTicket(guild, userId) {
   return guild.channels.cache.find(
     (channel) =>
       channel.type === ChannelType.GuildText &&
-      channel.topic?.includes(`verification-ticket:${userId}:open`)
+      channel.topic?.match(new RegExp(`^verification-ticket:${userId}(?::\\d+)?:open$`))
   ) || null;
 }
 
@@ -891,12 +875,17 @@ async function findOpenInquiryTicket(guild, userId) {
 }
 
 function parseTicketOwnerId(channel) {
-  const match = channel.topic?.match(/(?:verification|inquiry)-ticket:(\d+):open/);
+  const match = channel.topic?.match(/(?:verification|inquiry)-ticket:(\d+)(?::\d+)?:open/);
   return match?.[1] || null;
 }
 
 function parseTicketType(channel) {
-  const match = channel.topic?.match(/(verification|inquiry)-ticket:\d+:open/);
+  const match = channel.topic?.match(/(verification|inquiry)-ticket:\d+(?::\d+)?:open/);
+  return match?.[1] || null;
+}
+
+function parseTicketVerifiedRoleId(channel) {
+  const match = channel.topic?.match(/verification-ticket:\d+:(\d+):open/);
   return match?.[1] || null;
 }
 
@@ -908,7 +897,7 @@ async function isVerificationAdmin(interaction, guildSettings) {
   return member.roles.cache.has(adminRoleId) || interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild);
 }
 
-async function createVerificationTicket(interaction) {
+async function createVerificationTicket(interaction, requestedRoleId = null) {
   if (!interaction.inGuild()) {
     await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
     return;
@@ -930,6 +919,15 @@ async function createVerificationTicket(interaction) {
     return;
   }
 
+  const verifiedRole = requestedRoleId
+    ? await interaction.guild.roles.fetch(requestedRoleId)
+    : await getOrCreateVerifiedRole(interaction.guild, guildSettings);
+  if (!verifiedRole || verifiedRole.id === interaction.guild.roles.everyone.id) {
+    throw new Error('인증 승인 시 지급할 역할을 찾을 수 없습니다.');
+  }
+  assertCanManageRoles(interaction.guild);
+  assertRoleAssignable(interaction.guild, verifiedRole);
+
   const existingTicket = await findOpenVerificationTicket(interaction.guild, interaction.user.id);
   if (existingTicket) {
     await interaction.editReply(`이미 열린 인증 티켓이 있습니다: ${existingTicket}`);
@@ -945,7 +943,7 @@ async function createVerificationTicket(interaction) {
     name: sanitizeTicketChannelName(interaction.user),
     type: ChannelType.GuildText,
     ...(parent ? { parent } : {}),
-    topic: `verification-ticket:${interaction.user.id}:open`,
+    topic: `verification-ticket:${interaction.user.id}:${verifiedRole.id}:open`,
     permissionOverwrites: [
       {
         id: interaction.guild.roles.everyone.id,
@@ -987,6 +985,10 @@ async function createVerificationTicket(interaction) {
   const embed = new EmbedBuilder()
     .setTitle('인증 티켓')
     .setDescription(manualVerificationGuide)
+    .addFields({
+      name: '승인 시 자동 지급 역할',
+      value: `<@&${verifiedRole.id}>`
+    })
     .setColor(0x57f287);
 
   await channel.send({
@@ -1122,38 +1124,12 @@ async function handleTicketApprove(interaction) {
     return;
   }
 
-  const verifiedRole = await getOrCreateVerifiedRole(interaction.guild, guildSettings);
-
-  await interaction.editReply({
-    content: `인증 승인 시 지급할 역할을 선택해 주세요. 기본은 **${verifiedRole.name}** 역할입니다.`,
-    components: buildTicketApprovalRoleComponents(verifiedRole.id)
-  });
-}
-
-async function handleTicketApproveRole(interaction) {
-  if (!interaction.inGuild()) {
-    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
-    return;
-  }
-
-  await interaction.deferUpdate();
-
-  const ownerId = parseTicketOwnerId(interaction.channel);
-  if (!ownerId || parseTicketType(interaction.channel) !== 'verification') {
-    await interaction.editReply('이 채널은 열린 인증 티켓이 아닙니다.');
-    return;
-  }
-
-  const guildSettings = await getGuildSettings(interaction.guildId);
-  if (!(await isVerificationAdmin(interaction, guildSettings))) {
-    await interaction.editReply('인증 승인은 설정된 관리자 역할만 사용할 수 있습니다.');
-    return;
-  }
-
-  const roleId = interaction.values[0];
-  const role = await interaction.guild.roles.fetch(roleId);
+  const roleId = parseTicketVerifiedRoleId(interaction.channel);
+  const role = roleId
+    ? await interaction.guild.roles.fetch(roleId)
+    : await getOrCreateVerifiedRole(interaction.guild, guildSettings);
   if (!role || role.id === interaction.guild.roles.everyone.id) {
-    throw new Error('지급할 수 없는 역할입니다.');
+    throw new Error('이 티켓에 지정된 인증 역할을 찾을 수 없습니다.');
   }
 
   assertCanManageRoles(interaction.guild);
@@ -1170,10 +1146,11 @@ async function handleTicketApproveRole(interaction) {
       ? `${targetMember} 님은 이미 "${role.name}" 역할을 가지고 있습니다.`
       : `${targetMember} 님의 인증을 승인하고 "${role.name}" 역할을 지급했습니다.`
   );
-  await interaction.editReply({
-    content: alreadyHasRole ? '이미 지급된 역할입니다.' : '인증을 승인했습니다.',
-    components: []
-  });
+  await interaction.editReply(
+    alreadyHasRole
+      ? `이미 **${role.name}** 역할이 지급되어 있습니다.`
+      : `인증을 승인하고 **${role.name}** 역할을 자동 지급했습니다.`
+  );
 }
 
 async function handleTicketClose(interaction) {
@@ -1364,17 +1341,32 @@ async function assertCanCreatePanel(interaction, permissionMessage) {
   return true;
 }
 
+async function getPanelVerifiedRole(interaction) {
+  const selectedRole = interaction.options.getRole('인증역할');
+  const guildSettings = await getGuildSettings(interaction.guildId);
+  const verifiedRole = selectedRole || await getOrCreateVerifiedRole(interaction.guild, guildSettings);
+
+  if (verifiedRole.id === interaction.guild.roles.everyone.id) {
+    throw new Error('@everyone은 인증 역할로 지정할 수 없습니다.');
+  }
+
+  assertCanManageRoles(interaction.guild);
+  assertRoleAssignable(interaction.guild, verifiedRole);
+  return verifiedRole;
+}
+
 async function handlePanel(interaction) {
   if (!(await assertCanCreatePanel(interaction, '패널 생성은 서버 관리 권한이 필요합니다.'))) return;
 
   await interaction.deferReply({ ephemeral: true });
 
   const targetChannel = await getPanelTargetChannel(interaction);
+  const verifiedRole = await getPanelVerifiedRole(interaction);
 
-  await targetChannel.send(buildVerifyPanelPayload());
+  await targetChannel.send(buildVerifyPanelPayload(verifiedRole));
   await targetChannel.send(buildInquiryPanelPayload());
   await targetChannel.send(buildReligionPanelPayload());
-  await interaction.editReply(`${targetChannel} 채널에 인증·문의 티켓과 종교 역할 패널을 따로 보냈습니다.`);
+  await interaction.editReply(`${targetChannel} 채널에 인증·문의 티켓과 종교 역할 패널을 따로 보냈습니다. 인증 승인 시 ${verifiedRole} 역할이 자동 지급됩니다.`);
 }
 
 async function handleVerifyPanel(interaction) {
@@ -1383,9 +1375,10 @@ async function handleVerifyPanel(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   const targetChannel = await getPanelTargetChannel(interaction);
+  const verifiedRole = await getPanelVerifiedRole(interaction);
 
-  await targetChannel.send(buildVerifyPanelPayload());
-  await interaction.editReply(`${targetChannel} 채널에 인증 패널을 보냈습니다.`);
+  await targetChannel.send(buildVerifyPanelPayload(verifiedRole));
+  await interaction.editReply(`${targetChannel} 채널에 인증 패널을 보냈습니다. 승인 시 ${verifiedRole} 역할이 자동 지급됩니다.`);
 }
 
 async function handleReligionPanel(interaction) {
@@ -1446,7 +1439,16 @@ async function handlePreferenceRolePanel(interaction) {
 }
 
 async function handleVerifyGuide(interaction) {
-  await createVerificationTicket(interaction);
+  const prefix = `${customIds.verifyGuide}:`;
+  const verifiedRoleId = interaction.customId.startsWith(prefix)
+    ? interaction.customId.slice(prefix.length)
+    : null;
+
+  if (verifiedRoleId && !/^\d{17,22}$/.test(verifiedRoleId)) {
+    throw new Error('인증 패널에 지정된 역할 ID가 올바르지 않습니다.');
+  }
+
+  await createVerificationTicket(interaction, verifiedRoleId);
 }
 
 async function handleInquiryGuide(interaction) {
@@ -2977,7 +2979,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      if (interaction.customId === customIds.verifyGuide) {
+      if (
+        interaction.customId === customIds.verifyGuide
+        || interaction.customId.startsWith(`${customIds.verifyGuide}:`)
+      ) {
         await handleVerifyGuide(interaction);
         return;
       }
@@ -3020,11 +3025,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isStringSelectMenu() && interaction.customId === customIds.religionSelect) {
       await handleReligionSelect(interaction);
-      return;
-    }
-
-    if (interaction.isRoleSelectMenu() && interaction.customId === customIds.ticketApproveRole) {
-      await handleTicketApproveRole(interaction);
       return;
     }
 

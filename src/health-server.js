@@ -507,7 +507,7 @@ export function buildAdminHtml() {
       display: block;
       width: 100%;
       max-height: 220px;
-      margin-bottom: 12px;
+      margin-top: 12px;
       border-radius: 6px;
       object-fit: cover;
     }
@@ -648,7 +648,7 @@ export function buildAdminHtml() {
               <label for="welcomeEmojiText">외부 이모지/상단 문구</label>
               <input id="welcomeEmojiText" maxlength="300" placeholder="<:welcome:123456789012345678>" />
 
-              <label for="welcomeBannerImageUrl">상단 배너 이미지 URL</label>
+              <label for="welcomeBannerImageUrl">임베드 배너 이미지 URL</label>
               <input id="welcomeBannerImageUrl" type="url" maxlength="2048" placeholder="비워 두면 서버 배너 사용" />
 
               <label for="welcomeEmbedColor">임베드 색상</label>
@@ -679,7 +679,7 @@ export function buildAdminHtml() {
               <label for="leaveEmojiText">외부 이모지/상단 문구</label>
               <input id="leaveEmojiText" maxlength="300" placeholder="<:bye:123456789012345678>" />
 
-              <label for="leaveBannerImageUrl">상단 배너 이미지 URL</label>
+              <label for="leaveBannerImageUrl">임베드 배너 이미지 URL</label>
               <input id="leaveBannerImageUrl" type="url" maxlength="2048" placeholder="비워 두면 서버 배너 사용" />
 
               <label for="leaveEmbedColor">임베드 색상</label>
@@ -694,7 +694,6 @@ export function buildAdminHtml() {
         </div>
 
         <div id="preview" class="preview hidden">
-          <img id="previewBanner" class="preview-banner hidden" alt="로그 배너 미리보기" />
           <div class="preview-head">
             <img id="previewAvatar" alt="" />
             <div>
@@ -703,6 +702,7 @@ export function buildAdminHtml() {
             </div>
           </div>
           <p id="previewMessage"></p>
+          <img id="previewBanner" class="preview-banner hidden" alt="로그 배너 미리보기" />
         </div>
         <div id="rightStatus" class="status"></div>
       </section>

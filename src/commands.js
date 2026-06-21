@@ -86,6 +86,12 @@ export function buildCommands() {
           .setDescription('패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
+      )
+      .addRoleOption((option) =>
+        option
+          .setName('인증역할')
+          .setDescription('인증 승인 버튼을 누르면 자동 지급할 역할')
+          .setRequired(false)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.verifyPanel)
@@ -97,6 +103,12 @@ export function buildCommands() {
           .setDescription('인증 패널을 보낼 채널')
           .setRequired(false)
           .addChannelTypes(ChannelType.GuildText)
+      )
+      .addRoleOption((option) =>
+        option
+          .setName('인증역할')
+          .setDescription('인증 승인 버튼을 누르면 자동 지급할 역할')
+          .setRequired(false)
       ),
     new SlashCommandBuilder()
       .setName(commandNames.inquiryPanel)
