@@ -10,6 +10,7 @@ import {
   GatewayIntentBits,
   ModalBuilder,
   PermissionsBitField,
+  RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle
@@ -136,6 +137,7 @@ const customIds = {
   inquiryGuide: 'inquiry:start',
   preferenceRolePrefix: 'preference-role:',
   ticketApprove: 'ticket:approve',
+  ticketApproveRole: 'ticket:approve-role',
   ticketClose: 'ticket:close',
   religionSelect: 'religion:select',
   religionCustomButton: 'religion:custom',
@@ -156,7 +158,7 @@ const manualVerificationGuide = [
   '',
   '종이에 ‘돌아갈래’를 직접 적은 메모지와 함께 찍어서 티켓에 첨부',
   '',
-  '레벨 5 달성 화면이 보이도록 레벨 봇 프로필 또는 레벨 확인 창을 캡처한 스크린샷도 함께 첨부'
+  '레벨 3 달성 화면이 보이도록 레벨 봇 프로필 또는 레벨 확인 창을 캡처한 스크린샷도 함께 첨부'
 ].join('\n');
 
 const inviteCache = new Map();
@@ -215,21 +217,31 @@ async function replyAsGanadi(message) {
     maxInputCharacters: config.ganadiChatMaxInputCharacters
   });
 
-  await message.reply({
-    content: result.reply,
-    allowedMentions: {
-      parse: [],
-      repliedUser: false
-    }
-  });
-
-  await addGanadiAffection(
+  const updatedAffection = await addGanadiAffection(
     message.guildId,
     message.author.id,
     result.affectionDelta,
     buildLevelProfile(message.author, message.member)
   ).catch((error) => {
     console.error(`가나디 호감도 저장 실패 (${message.guildId}/${message.author.id}): ${error.message}`);
+    return null;
+  });
+
+  const affectionChangeText = updatedAffection
+    ? updatedAffection.lastChange > 0
+      ? `+${updatedAffection.lastChange.toLocaleString('ko-KR')}`
+      : updatedAffection.lastChange.toLocaleString('ko-KR')
+    : null;
+  const replyContent = affectionChangeText
+    ? `${result.reply}\n-# 호감도 ${affectionChangeText}`
+    : result.reply;
+
+  await message.reply({
+    content: replyContent,
+    allowedMentions: {
+      parse: [],
+      repliedUser: false
+    }
   });
 
   return true;
@@ -461,6 +473,20 @@ function buildTicketControls() {
         .setStyle(ButtonStyle.Danger)
     )
   ];
+}
+
+function buildTicketApprovalRoleComponents(defaultRoleId) {
+  const roleSelect = new RoleSelectMenuBuilder()
+    .setCustomId(customIds.ticketApproveRole)
+    .setPlaceholder('인증 승인 시 지급할 역할 선택')
+    .setMinValues(1)
+    .setMaxValues(1);
+
+  if (defaultRoleId) {
+    roleSelect.setDefaultRoles(defaultRoleId);
+  }
+
+  return [new ActionRowBuilder().addComponents(roleSelect)];
 }
 
 function buildInquiryTicketControls() {
@@ -700,6 +726,12 @@ function parseEmbedColor(value) {
   return Number.parseInt(value.slice(1), 16);
 }
 
+function getMemberLogBannerUrl(member, settings) {
+  return settings.bannerImageUrl
+    || member.guild.bannerURL({ extension: 'png', size: 1024 })
+    || null;
+}
+
 function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
   const tokens = buildMemberLogTokens(member, inviterInfo);
   const isWelcome = type === 'welcome';
@@ -714,6 +746,12 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
 
   const content = contentParts.filter(Boolean).join(' ');
   const allowedMentions = settings.mentionUser ? { users: [member.id], roles: [] } : { users: [], roles: [] };
+  const bannerImageUrl = getMemberLogBannerUrl(member, settings);
+  const bannerEmbed = bannerImageUrl
+    ? new EmbedBuilder()
+        .setColor(parseEmbedColor(settings.embedColor))
+        .setImage(bannerImageUrl)
+    : null;
 
   if (settings.useEmbed === false) {
     const plainLines = [
@@ -730,10 +768,13 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
       plainLines.push(`초대자: ${tokens.inviterMention} (${tokens.inviterName})`);
     }
 
-    return {
+    const payload = {
       content: [content, ...plainLines].filter(Boolean).join('\n'),
       allowedMentions
     };
+
+    if (bannerEmbed) payload.embeds = [bannerEmbed];
+    return payload;
   }
 
   const embed = new EmbedBuilder()
@@ -777,7 +818,7 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
   }
 
   const payload = {
-    embeds: [embed],
+    embeds: bannerEmbed ? [bannerEmbed, embed] : [embed],
     allowedMentions
   };
 
@@ -1081,12 +1122,58 @@ async function handleTicketApprove(interaction) {
     return;
   }
 
-  const targetMember = await interaction.guild.members.fetch(ownerId);
   const verifiedRole = await getOrCreateVerifiedRole(interaction.guild, guildSettings);
 
-  await targetMember.roles.add(verifiedRole, `수동 인증 승인: ${interaction.user.tag}`);
-  await interaction.channel.send(`${targetMember} 님에게 "${verifiedRole.name}" 역할을 지급했습니다.`);
-  await interaction.editReply('인증을 승인했습니다.');
+  await interaction.editReply({
+    content: `인증 승인 시 지급할 역할을 선택해 주세요. 기본은 **${verifiedRole.name}** 역할입니다.`,
+    components: buildTicketApprovalRoleComponents(verifiedRole.id)
+  });
+}
+
+async function handleTicketApproveRole(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: '서버 안에서만 사용할 수 있습니다.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  const ownerId = parseTicketOwnerId(interaction.channel);
+  if (!ownerId || parseTicketType(interaction.channel) !== 'verification') {
+    await interaction.editReply('이 채널은 열린 인증 티켓이 아닙니다.');
+    return;
+  }
+
+  const guildSettings = await getGuildSettings(interaction.guildId);
+  if (!(await isVerificationAdmin(interaction, guildSettings))) {
+    await interaction.editReply('인증 승인은 설정된 관리자 역할만 사용할 수 있습니다.');
+    return;
+  }
+
+  const roleId = interaction.values[0];
+  const role = await interaction.guild.roles.fetch(roleId);
+  if (!role || role.id === interaction.guild.roles.everyone.id) {
+    throw new Error('지급할 수 없는 역할입니다.');
+  }
+
+  assertCanManageRoles(interaction.guild);
+  assertRoleAssignable(interaction.guild, role);
+
+  const targetMember = await interaction.guild.members.fetch(ownerId);
+  const alreadyHasRole = targetMember.roles.cache.has(role.id);
+  if (!alreadyHasRole) {
+    await targetMember.roles.add(role, `수동 인증 승인: ${interaction.user.tag}`);
+  }
+
+  await interaction.channel.send(
+    alreadyHasRole
+      ? `${targetMember} 님은 이미 "${role.name}" 역할을 가지고 있습니다.`
+      : `${targetMember} 님의 인증을 승인하고 "${role.name}" 역할을 지급했습니다.`
+  );
+  await interaction.editReply({
+    content: alreadyHasRole ? '이미 지급된 역할입니다.' : '인증을 승인했습니다.',
+    components: []
+  });
 }
 
 async function handleTicketClose(interaction) {
@@ -1654,7 +1741,7 @@ function buildLevelEmbed(targetUser, stats, rank) {
     .setThumbnail(targetUser.displayAvatarURL({ extension: 'png', size: 256 }))
     .setColor(0x5865f2)
     .setDescription([
-      `## LEVEL ${stats.level}`,
+      `## LV.${stats.level}`,
       `${buildProgressBar(stats.progressPercent)} ${stats.progressPercent}%`,
       `${formatLevelNumber(stats.progressXp)} / ${formatLevelNumber(stats.requiredXp)} XP · 종합 ${rank ? `#${rank}` : '순위 없음'}`
     ].join('\n'))
@@ -1696,14 +1783,14 @@ function formatLevelRankingLine(entry, type) {
   const medal = ['🥇', '🥈', '🥉'][entry.rank - 1] || `**${entry.rank}위**`;
 
   if (type === 'chat') {
-    return `${medal} <@${entry.userId}> · **${formatLevelNumber(entry.chatCharacters)}자** (${formatLevelNumber(entry.chatMessages)}개) · Lv.${entry.level}`;
+    return `${medal} <@${entry.userId}> · **${formatLevelNumber(entry.chatCharacters)}자** (${formatLevelNumber(entry.chatMessages)}개) · LV.${entry.level}`;
   }
 
   if (type === 'voice') {
     return `${medal} <@${entry.userId}> · **${formatVoiceDuration(entry.voiceSeconds)}** · ${formatLevelNumber(entry.voiceXp)} XP`;
   }
 
-  return `${medal} <@${entry.userId}> · **Lv.${entry.level}** · ${formatLevelNumber(entry.totalXp)} XP`;
+  return `${medal} <@${entry.userId}> · **LV.${entry.level}** · ${formatLevelNumber(entry.totalXp)} XP`;
 }
 
 function buildLevelRankingEmbed(ranking, type) {
@@ -2933,6 +3020,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isStringSelectMenu() && interaction.customId === customIds.religionSelect) {
       await handleReligionSelect(interaction);
+      return;
+    }
+
+    if (interaction.isRoleSelectMenu() && interaction.customId === customIds.ticketApproveRole) {
+      await handleTicketApproveRole(interaction);
       return;
     }
 

@@ -80,7 +80,7 @@ export const config = {
   webAdminToken: process.env.WEB_ADMIN_TOKEN || null,
   levelChatXpPerCharacter: Math.max(1, Math.floor(readNumber(process.env.LEVEL_CHAT_XP_PER_CHARACTER, 1))),
   levelVoiceXpPerMinute: Math.max(1, Math.floor(readNumber(process.env.LEVEL_VOICE_XP_PER_MINUTE, 10))),
-  levelXpStep: Math.max(1, Math.floor(readNumber(process.env.LEVEL_XP_STEP, 250)))
+  levelXpStep: Math.max(1, Math.floor(readNumber(process.env.LEVEL_XP_STEP, 100)))
 };
 
 export function assertRequiredConfig({ forSyncOnly = false } = {}) {
