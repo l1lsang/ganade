@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { PermissionsBitField } from 'discord.js';
 import { config } from './config.js';
 
@@ -8,9 +9,13 @@ export const mbtiAxes = [
   ['J', 'P']
 ];
 
-export const voiceActiveRoleName = '🔊 음성채팅 중';
+export const voiceActiveRoleName = '음성채팅 중';
+const legacyVoiceActiveRoleName = '🔊 음성채팅 중';
+const voiceActiveRoleIconUrl = new URL('./assets/voice-active-role-icon.png', import.meta.url);
 const voiceActiveRoleCreation = new Map();
+const voiceActiveRoleIconConfigured = new Set();
 const preferenceRoleCreation = new Map();
+let voiceActiveRoleIconDataPromise = null;
 
 export const preferenceRoleChoices = Object.freeze({
   nsfw: Object.freeze({ name: 'NSFW', color: 0xed4245 }),
@@ -50,20 +55,47 @@ function findRoleByName(guild, name) {
   return guild.roles.cache.find((role) => role.name.toLocaleLowerCase('ko-KR') === normalized) || null;
 }
 
+function getVoiceActiveRoleIconData() {
+  if (!voiceActiveRoleIconDataPromise) {
+    voiceActiveRoleIconDataPromise = readFile(voiceActiveRoleIconUrl)
+      .then((buffer) => `data:image/png;base64,${buffer.toString('base64')}`)
+      .catch((error) => {
+        voiceActiveRoleIconDataPromise = null;
+        throw error;
+      });
+  }
+
+  return voiceActiveRoleIconDataPromise;
+}
+
 export async function getVoiceActiveRole(guild) {
   await guild.roles.fetch();
 
-  const role = findRoleByName(guild, voiceActiveRoleName);
+  const role = findRoleByName(guild, voiceActiveRoleName)
+    || findRoleByName(guild, legacyVoiceActiveRoleName);
   if (role) assertRoleAssignable(guild, role);
   return role;
 }
 
 async function ensureVoiceActiveRoleDisplay(guild, role) {
   let updatedRole = role;
+  const supportsRoleIcons = guild.features.includes('ROLE_ICONS');
+  const needsNameMigration = updatedRole.name !== voiceActiveRoleName;
+  const needsImageIcon = supportsRoleIcons && !voiceActiveRoleIconConfigured.has(guild.id);
+  const needsUnicodeEmojiRemoval = Boolean(updatedRole.unicodeEmoji);
 
-  if (guild.features.includes('ROLE_ICONS') && !updatedRole.icon && !updatedRole.unicodeEmoji) {
+  if (needsNameMigration || needsImageIcon || needsUnicodeEmojiRemoval) {
     assertCanManageRoles(guild);
-    updatedRole = await updatedRole.setUnicodeEmoji('🔊', '음성방 표시 역할 아이콘 설정');
+    updatedRole = await updatedRole.edit({
+      ...(needsNameMigration ? { name: voiceActiveRoleName } : {}),
+      ...(needsImageIcon ? { icon: await getVoiceActiveRoleIconData() } : {}),
+      ...(needsUnicodeEmojiRemoval ? { unicodeEmoji: null } : {}),
+      reason: '음성방 표시 역할 이름·아이콘 설정'
+    });
+  }
+
+  if (supportsRoleIcons && updatedRole.icon) {
+    voiceActiveRoleIconConfigured.add(guild.id);
   }
 
   const highestManageablePosition = guild.members.me.roles.highest.position - 1;
@@ -89,16 +121,18 @@ export async function getOrCreateVoiceActiveRole(guild) {
   const creation = (async () => {
     assertCanManageRoles(guild);
     const supportsRoleIcons = guild.features.includes('ROLE_ICONS');
+    const icon = supportsRoleIcons ? await getVoiceActiveRoleIconData() : null;
     const created = await guild.roles.create({
       name: voiceActiveRoleName,
       colors: { primaryColor: 0 },
       mentionable: false,
       permissions: [],
-      ...(supportsRoleIcons ? { unicodeEmoji: '🔊' } : {}),
+      ...(icon ? { icon } : {}),
       reason: '음성방 접속 표시 역할 자동 생성'
     });
 
     assertRoleAssignable(guild, created);
+    if (icon) voiceActiveRoleIconConfigured.add(guild.id);
     return ensureVoiceActiveRoleDisplay(guild, created);
   })().finally(() => {
     voiceActiveRoleCreation.delete(guild.id);
@@ -173,6 +207,21 @@ export async function getOrCreateVerifiedRole(guild, guildSettings = {}) {
 
   assertRoleAssignable(guild, created);
   return created;
+}
+
+export async function getConfiguredReligionVerifiedRole(guild, guildSettings = {}) {
+  const roleId = guildSettings.religionVerifiedRoleId || config.religionVerifiedRoleId;
+  if (!roleId) {
+    throw new Error('먼저 `/설정 종교인증역할:<역할>`로 종교 패널용 인증 역할을 설정해 주세요.');
+  }
+
+  const role = await guild.roles.fetch(roleId);
+  if (!role) {
+    throw new Error(`종교 인증 역할을 찾을 수 없습니다: ${roleId}`);
+  }
+
+  assertRoleAssignable(guild, role);
+  return role;
 }
 
 export function sanitizeReligionName(rawName) {

@@ -77,6 +77,7 @@ import {
   assertCanManageRoles,
   assertRoleAssignable,
   getMbtiAxis,
+  getConfiguredReligionVerifiedRole,
   getOrCreateMbtiRole,
   getOrCreatePreferenceRole,
   getOrCreateReligionRole,
@@ -105,7 +106,7 @@ import {
   setWarningBanThreshold,
   setWarningLogChannel
 } from './warnings.js';
-import { buildWelcomePayload } from './welcome.js';
+import { buildJoinDirectMessagePayload, buildWelcomePayload } from './welcome.js';
 
 assertRequiredConfig();
 await assertDataStorageReady();
@@ -491,7 +492,10 @@ function buildInquiryTicketControls() {
 function buildReligionPanelPayload() {
   const embed = new EmbedBuilder()
     .setTitle('종교 역할 선택')
-    .setDescription('아래 드롭다운에서 종교를 선택하거나, 목록에 없으면 직접 입력하세요.')
+    .setDescription([
+      '아래 드롭다운에서 종교를 선택하거나, 목록에 없으면 직접 입력하세요.',
+      '종교를 선택하면 해당 종교 역할과 서버에 별도로 설정된 종교 인증 역할을 함께 지급합니다.'
+    ].join('\n'))
     .setColor(0x5865f2);
 
   const religionOptions = config.religionChoices.map((name) => ({
@@ -570,11 +574,13 @@ function getConfiguredAdminRoleId(guildSettings) {
 
 function formatConfiguredSettings(guildSettings) {
   const verifiedRoleId = guildSettings.verifiedRoleId || config.verifiedRoleId;
+  const religionVerifiedRoleId = guildSettings.religionVerifiedRoleId || config.religionVerifiedRoleId;
   const adminRoleId = getConfiguredAdminRoleId(guildSettings);
   const logChannelId = getConfiguredLogChannelId(guildSettings);
 
   return [
     `인증 역할: ${verifiedRoleId ? `<@&${verifiedRoleId}>` : `"${config.verifiedRoleName}" 자동 생성/사용`}`,
+    `종교 인증 역할: ${religionVerifiedRoleId ? `<@&${religionVerifiedRoleId}>` : '설정 안 됨'}`,
     `관리자 역할: ${adminRoleId ? `<@&${adminRoleId}>` : '설정 안 됨'}`,
     `로그 채널: ${logChannelId ? `<#${logChannelId}>` : '설정 안 됨'}`,
     `MBTI 채널: ${guildSettings.mbtiChannelId ? `<#${guildSettings.mbtiChannelId}>` : '설정 안 됨'}`,
@@ -714,13 +720,21 @@ function parseEmbedColor(value) {
   return Number.parseInt(value.slice(1), 16);
 }
 
-function getMemberLogBannerUrl(member, settings) {
-  return settings.bannerImageUrl
-    || member.guild.bannerURL({ extension: 'png', size: 1024 })
-    || null;
+async function getMemberBannerUrl(member) {
+  const user = await member.user.fetch(true).catch((error) => {
+    console.warn(`사용자 배너 조회 실패 (${member.guild.id}/${member.id}): ${error.message}`);
+    return member.user;
+  });
+
+  if (!user.banner) return null;
+
+  return user.bannerURL({
+    extension: user.banner.startsWith('a_') ? 'gif' : 'png',
+    size: 1024
+  });
 }
 
-function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
+async function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
   const tokens = buildMemberLogTokens(member, inviterInfo);
   const isWelcome = type === 'welcome';
   const defaultTitle = isWelcome ? '{memberCount}번째 멤버가 입장했어요' : '{user} 님이 서버를 떠났어요';
@@ -734,7 +748,6 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
 
   const content = contentParts.filter(Boolean).join(' ');
   const allowedMentions = settings.mentionUser ? { users: [member.id], roles: [] } : { users: [], roles: [] };
-  const bannerImageUrl = getMemberLogBannerUrl(member, settings);
 
   if (settings.useEmbed === false) {
     const plainLines = [
@@ -756,6 +769,8 @@ function buildMemberLogPayload(member, settings, type, inviterInfo = null) {
       allowedMentions
     };
   }
+
+  const bannerImageUrl = await getMemberBannerUrl(member);
 
   const embed = new EmbedBuilder()
     .setTitle(title || (isWelcome ? '입장 로그' : '퇴장 로그'))
@@ -819,12 +834,23 @@ async function sendMemberLog(member, settings, type, inviterInfo = null) {
   const channel = await member.guild.channels.fetch(settings.channelId).catch(() => null);
   if (!channel || channel.type !== ChannelType.GuildText) return;
 
-  await channel.send(buildMemberLogPayload(member, settings, type, inviterInfo));
+  await channel.send(await buildMemberLogPayload(member, settings, type, inviterInfo));
 }
 
 async function sendWelcomeMessage(member, inviterInfo = null) {
   const guildSettings = await getGuildSettings(member.guild.id);
   await sendMemberLog(member, guildSettings.welcome, 'welcome', inviterInfo);
+}
+
+async function sendJoinDirectMessage(member) {
+  if (member.user.bot) return false;
+
+  const guildIconUrl = member.guild.iconURL({ extension: 'png', size: 256 });
+  await member.send(buildJoinDirectMessagePayload({
+    guildName: member.guild.name,
+    guildIconUrl
+  }));
+  return true;
 }
 
 async function sendLeaveMessage(member) {
@@ -1211,16 +1237,27 @@ async function handleReligion(interaction) {
 
 async function applyReligionRole(interaction, rawName) {
   const religionName = sanitizeReligionName(rawName);
-  const role = await getOrCreateReligionRole(interaction.guild, religionName);
-  const member = await fetchMember(interaction);
+  const [role, member, guildSettings] = await Promise.all([
+    getOrCreateReligionRole(interaction.guild, religionName),
+    fetchMember(interaction),
+    getGuildSettings(interaction.guildId)
+  ]);
+  const verifiedRole = await getConfiguredReligionVerifiedRole(interaction.guild, guildSettings);
 
   await replaceReligionRole(member, role);
+  if (verifiedRole.id !== role.id && !member.roles.cache.has(verifiedRole.id)) {
+    await member.roles.add(verifiedRole, `종교 역할 선택 시 종교 인증 역할 지급: ${interaction.user.tag}`);
+  }
 
-  return { role };
+  return { role, verifiedRole };
 }
 
-function formatReligionRoleReply({ role }) {
-  return `"${role.name}" 역할을 지급했습니다.`;
+function formatReligionRoleReply({ role, verifiedRole }) {
+  if (role.id === verifiedRole.id) {
+    return `"${role.name}" 역할을 지급했습니다.`;
+  }
+
+  return `"${role.name}" 종교 역할과 "${verifiedRole.name}" 종교 인증 역할을 함께 지급했습니다.`;
 }
 
 async function handleReligionSelect(interaction) {
@@ -1389,7 +1426,7 @@ async function handleReligionPanel(interaction) {
   const targetChannel = await getPanelTargetChannel(interaction);
 
   await targetChannel.send(buildReligionPanelPayload());
-  await interaction.editReply(`${targetChannel} 채널에 종교 역할 패널을 보냈습니다.`);
+  await interaction.editReply(`${targetChannel} 채널에 종교 역할 패널을 보냈습니다. 종교 선택 시 별도로 설정된 종교 인증 역할도 함께 지급됩니다.`);
 }
 
 async function handleInquiryPanel(interaction) {
@@ -2510,10 +2547,11 @@ async function handleSettings(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
   const role = interaction.options.getRole('인증역할');
+  const religionVerifiedRole = interaction.options.getRole('종교인증역할');
   const adminRole = interaction.options.getRole('관리자역할');
   const channel = interaction.options.getChannel('로그채널');
 
-  if (!role && !adminRole && !channel) {
+  if (!role && !religionVerifiedRole && !adminRole && !channel) {
     const guildSettings = await getGuildSettings(interaction.guildId);
     await interaction.editReply(`현재 설정입니다.\n${formatConfiguredSettings(guildSettings)}`);
     return;
@@ -2525,6 +2563,16 @@ async function handleSettings(interaction) {
     assertCanManageRoles(interaction.guild);
     assertRoleAssignable(interaction.guild, role);
     changes.verifiedRoleId = role.id;
+  }
+
+  if (religionVerifiedRole) {
+    if (religionVerifiedRole.id === interaction.guild.roles.everyone.id) {
+      throw new Error('@everyone은 종교 인증 역할로 사용할 수 없습니다.');
+    }
+
+    assertCanManageRoles(interaction.guild);
+    assertRoleAssignable(interaction.guild, religionVerifiedRole);
+    changes.religionVerifiedRoleId = religionVerifiedRole.id;
   }
 
   if (adminRole) {
@@ -3189,6 +3237,12 @@ client.on(Events.GuildMemberAdd, async (member) => {
     await sendWelcomeMessage(member, inviterInfo);
   } catch (error) {
     console.error(`환영 메시지 전송 실패 (${member.guild.id}/${member.id}): ${error.message}`);
+  }
+
+  try {
+    await sendJoinDirectMessage(member);
+  } catch (error) {
+    console.warn(`가입 안내 DM 전송 실패 (${member.guild.id}/${member.id}): ${error.message}`);
   }
 });
 

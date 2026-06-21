@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildCommands, commandNames } from '../src/commands.js';
-import { buildWelcomePayload, defaultWelcomeMessage } from '../src/welcome.js';
+import {
+  buildJoinDirectMessagePayload,
+  buildWelcomePayload,
+  defaultWelcomeMessage,
+  joinDirectMessageTitle
+} from '../src/welcome.js';
 
 const targetUser = {
   id: '123456789012345678',
@@ -52,4 +57,18 @@ test('직접 입력한 환영 글의 앞뒤 공백을 정리한다', () => {
 
   assert.ok(description.endsWith('우리 서버에서 함께 재미있게 놀아요!'));
   assert.ok(!description.includes(defaultWelcomeMessage));
+});
+
+test('가입 안내 DM에 서버 아이콘과 필수 할 일을 담는다', () => {
+  const payload = buildJoinDirectMessagePayload({
+    guildName: '가나디 마을',
+    guildIconUrl: 'https://cdn.example.com/guild-icon.png'
+  });
+  const embed = payload.embeds[0].toJSON();
+
+  assert.equal(embed.title, joinDirectMessageTitle);
+  assert.equal(embed.thumbnail.url, 'https://cdn.example.com/guild-icon.png');
+  assert.match(embed.description, /종교 카테고리/);
+  assert.match(embed.description, /자기소개 하기/);
+  assert.deepEqual(payload.allowedMentions.parse, []);
 });

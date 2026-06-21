@@ -93,8 +93,7 @@ function serializeGuild(guild) {
   return {
     id: guild.id,
     name: guild.name,
-    iconUrl: getGuildIconUrl(guild),
-    bannerUrl: guild.bannerURL({ extension: 'png', size: 1024 })
+    iconUrl: getGuildIconUrl(guild)
   };
 }
 
@@ -117,7 +116,6 @@ function normalizeMemberLogSettings(body, defaults) {
   const embedTitle = String(body.embedTitle || defaults.embedTitle).trim();
   const embedColor = String(body.embedColor || defaults.embedColor).trim();
   const emojiText = String(body.emojiText || '').trim();
-  const bannerImageUrl = String(body.bannerImageUrl || '').trim();
 
   if (!body.channelId) {
     throw new Error(`${defaults.label} 채널을 선택해 주세요.`);
@@ -135,23 +133,6 @@ function normalizeMemberLogSettings(body, defaults) {
     throw new Error('추가 이모지/문구는 300자 이하로 입력해 주세요.');
   }
 
-  if (bannerImageUrl.length > 2048) {
-    throw new Error('배너 이미지 URL은 2048자 이하로 입력해 주세요.');
-  }
-
-  if (bannerImageUrl) {
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(bannerImageUrl);
-    } catch {
-      throw new Error('배너 이미지 URL이 올바르지 않습니다.');
-    }
-
-    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-      throw new Error('배너 이미지 URL은 http 또는 https 주소여야 합니다.');
-    }
-  }
-
   if (!/^#[0-9a-fA-F]{6}$/.test(embedColor)) {
     throw new Error('임베드 색상은 #57f287 같은 HEX 색상이어야 합니다.');
   }
@@ -163,7 +144,6 @@ function normalizeMemberLogSettings(body, defaults) {
     embedTitle,
     embedColor,
     emojiText,
-    bannerImageUrl,
     useEmbed: body.useEmbed !== false,
     showProfileImage: body.showProfileImage !== false,
     mentionUser: body.mentionUser === true,
@@ -503,14 +483,6 @@ export function buildAdminHtml() {
       background: #f8fafc;
       padding: 14px;
     }
-    .preview-banner {
-      display: block;
-      width: 100%;
-      max-height: 220px;
-      margin-top: 12px;
-      border-radius: 6px;
-      object-fit: cover;
-    }
     .preview-head {
       display: flex;
       gap: 12px;
@@ -648,8 +620,7 @@ export function buildAdminHtml() {
               <label for="welcomeEmojiText">외부 이모지/상단 문구</label>
               <input id="welcomeEmojiText" maxlength="300" placeholder="<:welcome:123456789012345678>" />
 
-              <label for="welcomeBannerImageUrl">임베드 배너 이미지 URL</label>
-              <input id="welcomeBannerImageUrl" type="url" maxlength="2048" placeholder="비워 두면 서버 배너 사용" />
+              <p>가입자의 Discord 프로필 배너가 임베드 하단에 자동 표시됩니다.</p>
 
               <label for="welcomeEmbedColor">임베드 색상</label>
               <input id="welcomeEmbedColor" type="color" value="#3498db" />
@@ -679,8 +650,7 @@ export function buildAdminHtml() {
               <label for="leaveEmojiText">외부 이모지/상단 문구</label>
               <input id="leaveEmojiText" maxlength="300" placeholder="<:bye:123456789012345678>" />
 
-              <label for="leaveBannerImageUrl">임베드 배너 이미지 URL</label>
-              <input id="leaveBannerImageUrl" type="url" maxlength="2048" placeholder="비워 두면 서버 배너 사용" />
+              <p>퇴장자의 Discord 프로필 배너가 임베드 하단에 자동 표시됩니다.</p>
 
               <label for="leaveEmbedColor">임베드 색상</label>
               <input id="leaveEmbedColor" type="color" value="#ed4245" />
@@ -702,7 +672,6 @@ export function buildAdminHtml() {
             </div>
           </div>
           <p id="previewMessage"></p>
-          <img id="previewBanner" class="preview-banner hidden" alt="로그 배너 미리보기" />
         </div>
         <div id="rightStatus" class="status"></div>
       </section>
@@ -831,12 +800,9 @@ export function buildAdminHtml() {
       leaveMessage: document.getElementById('leaveMessage'),
       welcomeEmojiText: document.getElementById('welcomeEmojiText'),
       leaveEmojiText: document.getElementById('leaveEmojiText'),
-      welcomeBannerImageUrl: document.getElementById('welcomeBannerImageUrl'),
-      leaveBannerImageUrl: document.getElementById('leaveBannerImageUrl'),
       welcomeEmbedColor: document.getElementById('welcomeEmbedColor'),
       leaveEmbedColor: document.getElementById('leaveEmbedColor'),
       preview: document.getElementById('preview'),
-      previewBanner: document.getElementById('previewBanner'),
       previewAvatar: document.getElementById('previewAvatar'),
       previewTitle: document.getElementById('previewTitle'),
       previewGuild: document.getElementById('previewGuild'),
@@ -921,7 +887,6 @@ export function buildAdminHtml() {
       els[prefix + 'EmbedTitle'].value = settings?.embedTitle || defaults.title;
       els[prefix + 'Message'].value = settings?.message || defaults.message;
       els[prefix + 'EmojiText'].value = settings?.emojiText || '';
-      els[prefix + 'BannerImageUrl'].value = settings?.bannerImageUrl || '';
       els[prefix + 'EmbedColor'].value = settings?.embedColor || defaults.color;
     }
 
@@ -936,7 +901,6 @@ export function buildAdminHtml() {
         embedTitle: els[prefix + 'EmbedTitle'].value,
         message: els[prefix + 'Message'].value,
         emojiText: els[prefix + 'EmojiText'].value,
-        bannerImageUrl: els[prefix + 'BannerImageUrl'].value,
         embedColor: els[prefix + 'EmbedColor'].value
       };
     }
@@ -1010,9 +974,6 @@ export function buildAdminHtml() {
 
       els.preview.classList.remove('hidden');
       els.preview.style.borderLeftColor = data.embedColor;
-      const bannerImageUrl = data.bannerImageUrl || state.guild.bannerUrl || '';
-      els.previewBanner.src = bannerImageUrl;
-      els.previewBanner.classList.toggle('hidden', !bannerImageUrl);
       els.previewAvatar.src = data.showProfileImage
         ? 'https://cdn.discordapp.com/embed/avatars/0.png'
         : (state.guild.iconUrl || 'https://cdn.discordapp.com/embed/avatars/1.png');
@@ -1265,13 +1226,13 @@ export function buildAdminHtml() {
     ['input', 'change'].forEach((eventName) => {
       [
         els.welcomeEnabled, els.welcomeUseEmbed, els.welcomeShowProfileImage, els.welcomeMentionUser, els.welcomeShowInviter,
-        els.welcomeEmbedTitle, els.welcomeMessage, els.welcomeEmojiText, els.welcomeBannerImageUrl, els.welcomeEmbedColor
+        els.welcomeEmbedTitle, els.welcomeMessage, els.welcomeEmojiText, els.welcomeEmbedColor
       ].forEach((el) => {
         el.addEventListener(eventName, () => renderPreview('welcome'));
       });
       [
         els.leaveEnabled, els.leaveUseEmbed, els.leaveShowProfileImage, els.leaveMentionUser,
-        els.leaveEmbedTitle, els.leaveMessage, els.leaveEmojiText, els.leaveBannerImageUrl, els.leaveEmbedColor
+        els.leaveEmbedTitle, els.leaveMessage, els.leaveEmojiText, els.leaveEmbedColor
       ].forEach((el) => {
         el.addEventListener(eventName, () => renderPreview('leave'));
       });

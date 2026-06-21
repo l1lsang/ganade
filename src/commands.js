@@ -55,12 +55,18 @@ export function buildCommands() {
     buildUpdateCommand(),
     new SlashCommandBuilder()
       .setName(commandNames.settings)
-      .setDescription('인증 역할, 티켓 관리자 역할, 인증 로그 채널을 설정합니다.')
+      .setDescription('수동·종교 인증 역할, 티켓 관리자, 로그 채널을 설정합니다.')
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addRoleOption((option) =>
         option
           .setName('인증역할')
           .setDescription('인증 통과 시 지급할 역할')
+          .setRequired(false)
+      )
+      .addRoleOption((option) =>
+        option
+          .setName('종교인증역할')
+          .setDescription('종교 패널에서 종교 선택 시 함께 지급할 별도 인증 역할')
           .setRequired(false)
       )
       .addRoleOption((option) =>

@@ -3,6 +3,32 @@ import { EmbedBuilder } from 'discord.js';
 export const defaultWelcomeMessage =
   '환영한다듀...!!!!';
 
+export const joinDirectMessageTitle = '환영한다듀... 나는 가나디 봇이야아앙듀..';
+
+export function buildJoinDirectMessagePayload({ guildName, guildIconUrl = null }) {
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(joinDirectMessageTitle)
+    .setDescription([
+      `**${guildName}** 서버에 온 걸 환영해!`,
+      '',
+      '**서버에서 할 것**',
+      '1. 종교 카테고리에서 종교 역할 받기',
+      '2. 자기소개 하기'
+    ].join('\n'))
+    .setFooter({ text: `${guildName}에서 기다리고 있을게듀!` })
+    .setTimestamp();
+
+  if (guildIconUrl) {
+    embed.setThumbnail(guildIconUrl);
+  }
+
+  return {
+    embeds: [embed],
+    allowedMentions: { parse: [], users: [], roles: [] }
+  };
+}
+
 export function buildWelcomePayload({
   guildName,
   targetUser,

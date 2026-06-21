@@ -68,6 +68,7 @@ export const config = {
   ) * 1000,
   verifiedRoleId: process.env.VERIFIED_ROLE_ID || null,
   verifiedRoleName: process.env.VERIFIED_ROLE_NAME || '인증됨',
+  religionVerifiedRoleId: process.env.RELIGION_VERIFIED_ROLE_ID || null,
   adminRoleId: process.env.ADMIN_ROLE_ID || null,
   requiredPhrase: process.env.REQUIRED_PHRASE || '돌아갈래',
   verificationMinConfidence: readNumber(process.env.VERIFICATION_MIN_CONFIDENCE, 0.72),
