@@ -149,7 +149,7 @@ const customIds = {
 const manualVerificationGuide = [
   '2010년생 이상 (만 15세 생일 지난 사람만 가능)',
   '',
-  '음성 채팅 출석, 채팅 활동 등을 통해 레벨 5 이상 달성한 유저만 인증 가능',
+  '음성 채팅 출석, 채팅 활동 등을 통해 레벨 3 이상 달성한 유저만 인증 가능',
   '',
   '인증 방법',
   '',
@@ -2919,7 +2919,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     try {
       await reconcileVoiceIndicatorRoles(guild);
     } catch (error) {
-      console.error(`음성방 아이콘 역할 초기화 실패 (${guild.id}): ${error.message}`);
+      console.error(`음성방 표시 역할 초기화 실패 (${guild.id}): ${error.message}`);
     }
   }
 
@@ -2992,7 +2992,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   } catch (error) {
     const guildId = newState.guild?.id || oldState.guild?.id || 'unknown';
     const userId = newState.id || oldState.id || 'unknown';
-    console.error(`음성방 아이콘 역할 처리 실패 (${guildId}/${userId}): ${error.message}`);
+    console.error(`음성방 표시 역할 처리 실패 (${guildId}/${userId}): ${error.message}`);
   }
 
   try {

@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { PermissionsBitField } from 'discord.js';
 import { config } from './config.js';
 
@@ -11,11 +10,8 @@ export const mbtiAxes = [
 
 export const voiceActiveRoleName = '음성채팅 중';
 const legacyVoiceActiveRoleName = '🔊 음성채팅 중';
-const voiceActiveRoleIconUrl = new URL('./assets/voice-active-role-icon.png', import.meta.url);
 const voiceActiveRoleCreation = new Map();
-const voiceActiveRoleIconConfigured = new Set();
 const preferenceRoleCreation = new Map();
-let voiceActiveRoleIconDataPromise = null;
 
 export const preferenceRoleChoices = Object.freeze({
   nsfw: Object.freeze({ name: 'NSFW', color: 0xed4245 }),
@@ -55,19 +51,6 @@ function findRoleByName(guild, name) {
   return guild.roles.cache.find((role) => role.name.toLocaleLowerCase('ko-KR') === normalized) || null;
 }
 
-function getVoiceActiveRoleIconData() {
-  if (!voiceActiveRoleIconDataPromise) {
-    voiceActiveRoleIconDataPromise = readFile(voiceActiveRoleIconUrl)
-      .then((buffer) => `data:image/png;base64,${buffer.toString('base64')}`)
-      .catch((error) => {
-        voiceActiveRoleIconDataPromise = null;
-        throw error;
-      });
-  }
-
-  return voiceActiveRoleIconDataPromise;
-}
-
 export async function getVoiceActiveRole(guild) {
   await guild.roles.fetch();
 
@@ -79,30 +62,21 @@ export async function getVoiceActiveRole(guild) {
 
 async function ensureVoiceActiveRoleDisplay(guild, role) {
   let updatedRole = role;
-  const supportsRoleIcons = guild.features.includes('ROLE_ICONS');
   const needsNameMigration = updatedRole.name !== voiceActiveRoleName;
-  const needsImageIcon = supportsRoleIcons && !voiceActiveRoleIconConfigured.has(guild.id);
-  const needsUnicodeEmojiRemoval = Boolean(updatedRole.unicodeEmoji);
 
-  if (needsNameMigration || needsImageIcon || needsUnicodeEmojiRemoval) {
+  if (needsNameMigration) {
     assertCanManageRoles(guild);
     updatedRole = await updatedRole.edit({
-      ...(needsNameMigration ? { name: voiceActiveRoleName } : {}),
-      ...(needsImageIcon ? { icon: await getVoiceActiveRoleIconData() } : {}),
-      ...(needsUnicodeEmojiRemoval ? { unicodeEmoji: null } : {}),
-      reason: '음성방 표시 역할 이름·아이콘 설정'
+      name: voiceActiveRoleName,
+      reason: '음성방 표시 역할 이름 설정'
     });
-  }
-
-  if (supportsRoleIcons && updatedRole.icon) {
-    voiceActiveRoleIconConfigured.add(guild.id);
   }
 
   const highestManageablePosition = guild.members.me.roles.highest.position - 1;
   if (highestManageablePosition > updatedRole.position) {
     assertCanManageRoles(guild);
     updatedRole = await updatedRole.setPosition(highestManageablePosition, {
-      reason: '음성방 표시 역할 아이콘 우선순위 설정'
+      reason: '음성방 표시 역할 우선순위 설정'
     });
   }
 
@@ -120,19 +94,15 @@ export async function getOrCreateVoiceActiveRole(guild) {
 
   const creation = (async () => {
     assertCanManageRoles(guild);
-    const supportsRoleIcons = guild.features.includes('ROLE_ICONS');
-    const icon = supportsRoleIcons ? await getVoiceActiveRoleIconData() : null;
     const created = await guild.roles.create({
       name: voiceActiveRoleName,
       colors: { primaryColor: 0 },
       mentionable: false,
       permissions: [],
-      ...(icon ? { icon } : {}),
       reason: '음성방 접속 표시 역할 자동 생성'
     });
 
     assertRoleAssignable(guild, created);
-    if (icon) voiceActiveRoleIconConfigured.add(guild.id);
     return ensureVoiceActiveRoleDisplay(guild, created);
   })().finally(() => {
     voiceActiveRoleCreation.delete(guild.id);
