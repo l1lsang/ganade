@@ -70,7 +70,7 @@ export const config = {
   verifiedRoleName: process.env.VERIFIED_ROLE_NAME || '인증됨',
   religionVerifiedRoleId: process.env.RELIGION_VERIFIED_ROLE_ID || null,
   adminRoleId: process.env.ADMIN_ROLE_ID || null,
-  requiredPhrase: process.env.REQUIRED_PHRASE || '돌아갈래',
+  requiredPhrase: process.env.REQUIRED_PHRASE || '듀플로우',
   verificationMinConfidence: readNumber(process.env.VERIFICATION_MIN_CONFIDENCE, 0.72),
   religionRolePrefix: process.env.RELIGION_ROLE_PREFIX || '종교 | ',
   religionChoices: readList(process.env.RELIGION_CHOICES, defaultReligions).slice(0, 25),
